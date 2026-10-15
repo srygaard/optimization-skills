@@ -757,19 +757,36 @@ def _references(repo: Path, shipped: list) -> list:
     return out
 
 
-def _named_in(refs: list, name: str, module: str) -> list:
-    """Files that name `name` as `x.name`, or as `name` alongside the module's name. A bare common
-    word (`Model`, `run`) elsewhere is not a reference, and neither is a dunder."""
+def _named_in(refs: list, name: str, module: str) -> tuple:
+    """(files that name it, files that only mention it). Naming takes its module: `module.name` or
+    `module:name` (a yaml `target:`, an entry point, a "main.SetupCallback" string in the code) or
+    `from ...module import name`. A bare `.name` or "name" (`model.train()`, `split="train"`) is only a
+    mention, left for review. Dunders are never references."""
     if name.startswith("__") and name.endswith("__"):
-        return []
-    dotted = re.compile(rf"\.{re.escape(name)}\b")
-    word, mod = re.compile(rf"\b{re.escape(name)}\b"), re.compile(rf"\b{re.escape(module)}\b")
-    literal = re.compile(rf"[\"'](?:[\w.:/-]*\.)?{re.escape(name)}[\"']")  # "SetupCallback", "main.SetupCallback"
-    hits = []
+        return [], []
+    n, m = re.escape(name), re.escape(module)
+    qualified = re.compile(rf"\b{m}[.:]{n}\b|\bfrom\s+[\w.]*\b{m}\s+import\s*(?:\([^)]*|[^\n]*)\b{n}\b")
+    in_string = re.compile(rf"[\"'][^\"'\n]*\b{m}[.:]{n}[\"']")
+    bare, bare_string = re.compile(rf"\b{n}\b"), re.compile(rf"[\"']{n}[\"']")
+    named, mentioned = [], []
     for rel, text, strings_only in refs:
-        if literal.search(text) if strings_only else dotted.search(text) or (word.search(text) and mod.search(text)):
-            hits.append(rel)
-    return hits
+        if (in_string if strings_only else qualified).search(text):
+            named.append(rel)
+        elif (bare_string if strings_only else bare).search(text):
+            mentioned.append(rel)
+    return named, mentioned
+
+
+def runtime_lines(index, file: str, line: int) -> set:
+    """Lines that only run when the code is used: a function's body, or the bodies of a class's methods.
+    Def, decorator and class-body lines run on import, so coverage of them says nothing."""
+    d = index.at_def_line(file, line)
+    if not d:
+        return set()
+    start, end, _, _, kind = d
+    bodies = [d] if kind == "function" else [
+        x for x in index.defs.get(file, ()) if x[4] == "function" and start <= x[0] and x[1] <= end]
+    return {n for _, e, _, def_line, _ in bodies for n in range(def_line + 1, e + 1)}
 
 
 def vulture_rows(text: str) -> list:
@@ -806,8 +823,9 @@ def vulture_dead(repo, files, index) -> Result:
         qual = d[2] if d and m["name"] and d[2].endswith(m["name"]) else (m["name"] or index.qualname(file, line))
         name = qual.rsplit(".", 1)[-1]
         module = Path(file).parent.name if Path(file).stem == "__init__" else Path(file).stem
-        hits = _named_in(refs, name, module) if m["kind"] else []  # unreachable code can't be referenced
-        ran = bool(coverage.get(file, set()) & set(range(line, line + size)))
+        # unreachable code can't be referenced
+        hits, mentions = _named_in(refs, name, module) if m["kind"] else ([], [])
+        ran = bool(coverage.get(file, set()) & runtime_lines(index, file, line))
         if not hits and not ran:
             total += size
         if size < MIN_DEAD_LINES:
@@ -820,10 +838,11 @@ def vulture_dead(repo, files, index) -> Result:
             f"{m['msg']} ({size} lines, vulture {m['conf']}% confidence)",
             file=file, symbol=qual, line=line, end_line=line + size - 1,
             evidence={"lines": size, "confidence": int(m["conf"]), "referenced_in": hits[:5],
-                      "executed": ran if coverage else None},
+                      "mentioned_in": mentions[:5], "executed": ran if coverage else None},
             status="dismissed" if note else "open", note=note, effort="S",
             fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
-                 "notebooks, shell scripts), then delete it."),
+                 "notebooks, shell scripts; files that mention its bare name are in `evidence.mentioned_in`), "
+                 "then delete it."),
             done_when="Deleted, and the import test and safety net pass."))
     return Result(out, {"dead_code_loc": total})
 
