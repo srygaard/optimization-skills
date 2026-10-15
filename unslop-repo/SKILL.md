@@ -96,7 +96,9 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   [red-flags.md](references/red-flags.md). After the phase, review the same files again.
 - **Medium and above:** make `fix` and `done_when` concrete when the default text is generic.
 - **To dismiss:** `"status": "dismissed"` plus a `note` with the reason. A false positive, a deliberate
-  design (an override like `model.train = disabled_train`) or not worth it are all valid. Your edits
+  design (an override like `model.train = disabled_train`), not worth it, or a rotated key that stays in
+  the local history are all valid. `fixed` only sticks once the tools stop detecting the issue:
+  re-measuring reopens a fixed issue they still see. Your edits
   survive re-runs; `grep <ID> .cleanup/issues.json` shows one issue per line.
 - **Bugs found on the way** get their own issue (`"category": "bug"`, `"source": "agent"`, ID `BUG-A1`)
   and their own commit, never inside a refactor.

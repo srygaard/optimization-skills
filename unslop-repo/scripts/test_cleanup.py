@@ -105,6 +105,10 @@ def offline():
     check(get["g"]["status"] == "open", "a fixed issue that is detected again reopens")
     c.merge(data, [], set())
     check(get["g"]["status"] == "open", "a tool that didn't run closes nothing")
+    get["g"].update(status="fixed", note="refactored")
+    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
+    check(get["g"]["status"] == "open" and "refactored" in get["g"]["note"],
+          "an issue an agent marked fixed reopens while the tool still detects it, keeping the agent's note")
 
     empty = c.CodeIndex(Path("/r"), [])
     issues = c.scb_issues(SCB_SAMPLE, Path("/r"), empty, high_cc=1)

@@ -224,8 +224,9 @@ def merge(data: dict, found: list, sources: set):
     """Fold fresh findings into issues.json.
 
     A field an agent edited (status, severity, fix, ...) survives; one still holding the value the tool
-    last wrote takes the new value. Open issues from `sources` that are no longer detected become fixed;
-    fixed issues that are detected again reopen.
+    last wrote takes the new value. Open issues from `sources` that are no longer detected become fixed.
+    A fixed issue that is detected again reopens, whoever marked it fixed: a fix the tool can still see
+    is not one.
     """
     defaults = data.setdefault("defaults", {})  # per issue: hashes of the values the tool last wrote
     by_id = {i["id"]: i for i in data["issues"]}
@@ -242,12 +243,14 @@ def merge(data: dict, found: list, sources: set):
             by_id[ident] = new
             continue
         edited = {k: old[k] for k in AGENT_FIELDS if k in old and (prev is None or _digest(old[k]) != prev.get(k))}
-        reopened = old["status"] == "fixed" and "status" not in edited
+        was_fixed = old["status"] == "fixed"
         old.update(new)
         old.update(edited)
-        if reopened:
-            old["note"] = "detected again after being marked fixed"
-            defaults[ident]["note"] = _digest(old["note"])
+        if was_fixed:
+            earlier = edited.get("note") or ""
+            old["status"] = new["status"]
+            old["note"] = "detected again after being marked fixed" + (f" (earlier note: {earlier})" if earlier else "")
+            defaults[ident].update(status=_digest(old["status"]), note=_digest(old["note"]))
     for i in data["issues"]:
         if i.get("source") in sources and i["id"] not in seen and i["status"] == "open":
             i["status"], i["note"] = "fixed", "no longer detected"
@@ -406,7 +409,9 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
                       "and keep it out of the published history: publish a fresh squashed history, or "
                       "rewrite history with the user's approval." if g["at_head"] else
                       "It is gone from HEAD but still in history: publish a fresh squashed history, or "
-                      "rewrite history with the user's approval."))
+                      "rewrite history with the user's approval.")
+                   + " The scan keeps finding it in the local history, so then dismiss this issue with a note "
+                     "saying it was rotated and how history is handled.")
         else:
             fix = ("Check whether this is a real credential by looking at the location; never print the "
                    "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
@@ -415,7 +420,7 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
             "LEAK", "betterleaks", "leak", rule, severity,
             f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} ({where})",
             key=f"LEAK|{key}", file=file, line=line, evidence=evidence, fix=fix,
-            done_when="Rotated (user confirms) and absent from HEAD and from any history that will be published."))
+            done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled."))
     return out
 
 
@@ -1209,7 +1214,7 @@ HOW_TO = """\
 2. Critical leaks: the user must revoke/rotate the key first. Never print, echo or `cat` a secret; the previews here are enough.
 3. Safety net before refactoring, in its own commit under `tests/` (outside the metrics): a test that imports every module, `--help` for each entry point, and a characterization test (small synthetic inputs, pinned output) for each function you change. The tests must run in the project's real environment; if it isn't available (e.g. no torch, no GPU), ask the user before refactoring, and don't commit stubs.
 4. One issue per commit, with a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit. Delete dead code before refactoring: issues marked "Inside dead-code candidate" go away with it.
-5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. A false positive, a deliberate design, or not worth the change are all valid reasons. Bugs you find get their own issue (`"category": "bug"`, `"source": "agent"`, ID `BUG-A1`, ...) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
+5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"category": "bug"`, `"source": "agent"`, ID `BUG-A1`, ...) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
 6. No nitpicks: only change what makes the code meaningfully easier to understand, use or change. A refactor that adds lines needs a reason.
 7. Re-measure when you stop (the label is any name): `.cleanup/cleanup.py leaks .`, `.cleanup/cleanup.py measure . --label after-<what>`, `.cleanup/cleanup.py compare . baseline`, `.cleanup/cleanup.py report .` (needs uv)."""
 
