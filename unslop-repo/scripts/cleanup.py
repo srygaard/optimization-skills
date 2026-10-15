@@ -327,17 +327,22 @@ def _internal_rule(n: int, regex: str) -> str:
 CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
-def leak_issues(repo: Path, findings: list) -> list:
+def head_paths(repo: Path, needles: set, tmp: Path) -> dict:
+    """{needle: paths of the files at HEAD that contain it}. A needle reaches git through a file in the
+    private temp dir, never a command line; a multi-line secret is searched by its longest line."""
+    pattern, out = Path(tmp, "needle"), {}
+    for needle in needles:
+        pattern.write_text(max(needle.splitlines(), key=len) + "\n")
+        p = run(["git", "-C", repo, "grep", "-l", "-z", "-F", "-f", pattern, "HEAD", "--"])
+        if p.returncode not in (0, 1):  # 1: no match
+            die(f"git grep failed: {p.stderr.strip()[-200:]}")
+        out[needle] = sorted(x.split(":", 1)[1] for x in p.stdout.split("\0") if x)
+    pattern.unlink(missing_ok=True)
+    return out
+
+
+def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
     """Group Betterleaks findings by distinct secret. Plaintext never leaves this function."""
-    head_blobs = {}
-
-    def in_head(path: str, needle: str) -> bool:
-        if path not in head_blobs:
-            p = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{path}"], capture_output=True)
-            head_blobs[path] = p.stdout if p.returncode == 0 else None
-        blob = head_blobs[path]
-        return blob is not None and needle.encode() in blob
-
     groups = {}
     for f in findings:
         secret = f.get("Secret") or ""
@@ -347,7 +352,7 @@ def leak_issues(repo: Path, findings: list) -> list:
         basis = f"internal|{f['RuleID']}|{f['File']}" if internal else secret or f"path:{f['File']}"
         key = hashlib.sha256(basis.encode()).hexdigest()
         g = groups.setdefault(key, {
-            "rules": {}, "internal": internal, "locs": [], "fingerprints": [], "at_head": False,
+            "rules": {}, "internal": internal, "locs": [], "fingerprints": [], "needles": set(), "paths": set(),
             "first": None, "example": (f["File"], f["StartLine"]), "matches": set(),
             "preview": f"{secret[:4]}… ({len(secret)} chars)" if secret else "(file name)",
         })
@@ -357,17 +362,27 @@ def leak_issues(repo: Path, findings: list) -> list:
             g["preview"] = min(g["matches"])
         g["locs"].append(f"{f['File']}:{f['StartLine']}@{f['Commit'][:8]}")
         g["fingerprints"].append(f["Fingerprint"])
-        g["at_head"] = g["at_head"] or in_head(f["File"], secret)
+        g["paths"].add(f["File"])
+        if secret.strip():
+            g["needles"].add(secret)
         if g["first"] is None or f.get("Date", "") < g["first"][0]:
             g["first"] = (f.get("Date", ""), f["Commit"][:12])
 
+    # Where is it now? Betterleaks reports the commit and path that added a line, and a file may have
+    # been moved since, so search HEAD's contents. A finding on a file name is at HEAD while the path is.
+    hits = head_paths(repo, {n for g in groups.values() for n in g["needles"]}, tmp)
+    tree = set(git(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0"))
     out = []
     for key, g in groups.items():
         rule = min(g["rules"], key=lambda r: (CONFIDENCE_RANK.get(g["rules"][r], 9), "generic" in r, r))
+        now_in = sorted({p for n in g["needles"] for p in hits[n]} if g["needles"] else g["paths"] & tree)
+        g["at_head"] = bool(now_in)
         file, line = g["example"]
+        if now_in and file not in now_in:
+            file, line = now_in[0], None
         where = "at HEAD" if g["at_head"] else "only in history"
         evidence = {
-            "rules": sorted(g["rules"]), "preview": g["preview"], "at_head": g["at_head"],
+            "rules": sorted(g["rules"]), "preview": g["preview"], "at_head": g["at_head"], "head_files": now_in[:10],
             "first_commit": g["first"][1], "first_date": g["first"][0],
             "occurrences": len(g["locs"]), "locations": g["locs"][:10], "fingerprints": g["fingerprints"][:10],
         }
@@ -412,15 +427,20 @@ def large_file_issues(repo: Path) -> list:
             paths.setdefault(sha, path)
     p = run(["git", "-C", repo, "cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
             input="\n".join(paths) + "\n")
-    sizes = {}
+    at_head = {}  # blob -> its path at HEAD: compare blobs, not paths, so a moved file is still at HEAD
+    for row in git(repo, "ls-tree", "-r", "-z", "HEAD").split("\0"):
+        if row:
+            meta, path = row.split("\t", 1)
+            at_head[meta.split()[2]] = path
+    sizes = {}  # path -> (largest size, whether a large blob of it is at HEAD)
     for row in p.stdout.splitlines():
-        sha, kind, size = row.split()
+        sha, kind, size = (row.split() + ["", ""])[:3]
         if kind == "blob" and int(size) > LARGE_FILE_MB * 1_000_000:
-            sizes[paths[sha]] = max(sizes.get(paths[sha], 0), int(size))
-    at_head = set(git(repo, "ls-tree", "-r", "--name-only", "HEAD").splitlines())
+            path = at_head.get(sha) or paths[sha]
+            old_size, old_here = sizes.get(path, (0, False))
+            sizes[path] = (max(old_size, int(size)), old_here or sha in at_head)
     out = []
-    for path, size in sorted(sizes.items(), key=lambda kv: -kv[1]):
-        here = path in at_head
+    for path, (size, here) in sorted(sizes.items(), key=lambda kv: -kv[1][0]):
         out.append(issue(
             "FILE", "git-history", "large-file", "large-file", "high" if here else "medium",
             f"{size / 1e6:.1f} MB file `{path}` ({'at HEAD' if here else 'only in history'})",
@@ -453,7 +473,7 @@ def cmd_leaks(a):
                  "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
         if p.returncode or not report.exists():
             die(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
-        found = leak_issues(repo, json.loads(report.read_text() or "[]"))
+        found = leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
     found += large_file_issues(repo)
     merge(data, found, {"betterleaks", "git-history"})
     data["tools"]["betterleaks"] = version

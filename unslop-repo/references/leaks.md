@@ -8,6 +8,8 @@ delete it. That is why the scan is mandatory and runs first.
 - **The full git history:** every commit on every ref (`betterleaks git`), so a key deleted three years
   ago is still found.
 - **Large blobs** (> 5 MB) anywhere in history: checkpoints, datasets, pickles, gifs.
+- **"At HEAD"** means the matched text (or the large blob) is somewhere in the HEAD tree, even if the
+  file was moved after the commit that added it.
 - **Not scanned:** untracked files (the script warns; commit or ignore them and re-run), Git LFS content,
   submodules, and anything outside git (wandb runs, checkpoints on disk, Hugging Face model cards).
 
