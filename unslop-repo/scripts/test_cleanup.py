@@ -106,6 +106,44 @@ def offline():
     c.merge(data, [], set())
     check(get["g"]["status"] == "open", "a tool that didn't run closes nothing")
 
+    empty = c.CodeIndex(Path("/r"), [])
+    issues = c.scb_issues(SCB_SAMPLE, Path("/r"), empty, high_cc=1)
+    check(sorted(i["category"] for i in issues) == ["complexity", "red-flag", "red-flag"],
+          "scb-check output becomes a complexity issue, a wrapper and a duplicate group")
+    raised = []
+    for args in ((SCB_SAMPLE, Path("/r"), empty, 2), (SCB_SAMPLE.replace("┌─", "--"), Path("/r"), empty, 1)):
+        try:
+            c.scb_issues(*args)
+        except c.ToolError:
+            raised.append(True)
+    check(len(raised) == 2, "scb-check output that doesn't match its JSON totals or format is an error, not 'clean'")
+    row = "pkg/a.py:5: unused function 'helper' (60% confidence, 5 lines)"
+    check(c.vulture_rows(row + "\n")[0]["name"] == "helper", "vulture lines are parsed")
+    try:
+        c.vulture_rows(row + "\nsomething vulture never printed before\n")
+        check(False, "an unrecognized vulture line is an error")
+    except c.ToolError:
+        check(True, "an unrecognized vulture line is an error")
+
+    def ok(repo, files, index):
+        return c.Result([cx("h")], {"m": 1})
+
+    def nothing_to_read(repo, files, index):
+        return c.Result([], {}, skipped="no lockfile")
+
+    def broken(repo, files, index):
+        raise KeyError("total_loc")
+
+    found, metrics, not_measured, measured = c.run_steps(None, [], None, steps=(
+        ("a", ok), ("b", nothing_to_read), ("c", broken)))
+    check(measured == {"a"} and set(not_measured) == {"b", "c"} and metrics == {"m": 1},
+          "a skipped or broken step is not measured, and the other steps still count")
+    check(found[0]["source"] == "a", "issues carry the name of the step that found them")
+    data = {"issues": []}
+    c.merge(data, [dict(cx("v"), source="b")], {"b"})
+    c.merge(data, found, measured)
+    check(data["issues"][0]["status"] == "open", "a step that measured nothing doesn't close its issues")
+
 
 # --- end to end ------------------------------------------------------------------------------------
 
