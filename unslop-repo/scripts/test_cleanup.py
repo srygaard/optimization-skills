@@ -138,6 +138,25 @@ def offline():
     def broken(repo, files, index):
         raise KeyError("total_loc")
 
+    with tempfile.TemporaryDirectory() as tmp:
+        def load(text):
+            (Path(tmp) / "issues.json").write_text(text)
+            try:
+                return c.load_issues(Path(tmp))
+            except c.CleanupError as e:
+                return str(e)
+
+        bug = {"id": "BUG-A1", "category": "bug", "severity": "high", "summary": "found while reading"}
+        data = load(json.dumps({"issues": [bug]}))
+        check(isinstance(data, dict) and data["issues"][0]["status"] == "open" and data["issues"][0]["evidence"] == {},
+              "an agent issue with only id, category, severity and summary gets the other fields")
+        error = load(json.dumps({"issues": [{**bug, "severity": "Critical"}, {**bug, "id": "BUG-A2", "status": "done"},
+                                            {**bug, "id": "BUG-A3", "status": "dismissed"}]}))
+        check(isinstance(error, str) and all(f"BUG-A{n}" in error for n in (1, 2, 3)),
+              "a misspelled severity or status, or a dismissal without a note, stops the command and names the issue")
+        error = load('{"issues": [}')
+        check(isinstance(error, str) and "not valid JSON (line 1" in error, "broken JSON stops the command with its line")
+
     found, metrics, not_measured, measured = c.run_steps(None, [], None, steps=(
         ("a", ok), ("b", nothing_to_read), ("c", broken)))
     check(measured == {"a"} and set(not_measured) == {"b", "c"} and metrics == {"m": 1},
