@@ -47,4 +47,5 @@ touches issues with `"source": "agent"`.
 ```
 
 **Keep the count comparable.** After the phase, review the same files again: mark fixed flags
-`fixed`, and add any new ones. The open red-flag count before and after is the measure.
+`fixed`, and add any new ones. The open red-flag count before and after is the measure. Run `report`
+after each review: it recounts the snapshot taken at HEAD, so the baseline includes the flags you added.

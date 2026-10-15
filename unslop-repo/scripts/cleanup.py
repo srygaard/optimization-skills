@@ -176,6 +176,12 @@ def leak_scan_current(data: dict, repo: Path) -> bool:
     return data.get("leak_scan", {}).get("commit") == head(repo)
 
 
+def release_status(data: dict, repo: Path) -> str:
+    """Blocked while any critical or high issue is open, or while the leak scan is older than HEAD."""
+    blocked = not leak_scan_current(data, repo) or open_issues(data, "critical", "high")
+    return "blocked" if blocked else "clear"
+
+
 def require_leak_scan(data: dict, repo: Path):
     if not leak_scan_current(data, repo):
         die("the leak scan is mandatory: run `cleanup.py leaks <repo>` on the current commit first")
@@ -188,8 +194,7 @@ def save_issues(d: Path, data: dict, repo: Path):
         i["status"] != "open", rank.get(i["severity"], 9), i["category"],
         -(i.get("evidence") or {}).get("weight", (i.get("evidence") or {}).get("lines", 0)), i["id"]))
     data["commit"], data["generated"] = head(repo), now()
-    blocked = not leak_scan_current(data, repo) or open_issues(data, "critical", "high")
-    data["release_status"] = "blocked" if blocked else "clear"
+    data["release_status"] = release_status(data, repo)
     meta = [f"  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in data.items()
             if k not in ("issues", "defaults")]
     issues = ",\n".join("    " + json.dumps(i, ensure_ascii=False) for i in data["issues"])
@@ -1056,14 +1061,10 @@ def cmd_measure(a):
             i["status"], i["note"] = "dismissed", f"no longer checked: {RETIRED_SOURCES[i['source']]}"
     data["tools"].update(TOOLS)
     save_issues(d, data, repo)
-    snap["metrics"]["red_flags_open"] = len([i for i in open_issues(data) if i["category"] == "red-flag"])
-    snap["metrics"]["leaks_open"] = len([i for i in open_issues(data) if i["category"] == "leak"])
-    snap["open_issues"] = {s: len(open_issues(data, s)) for s in SEVERITIES}
-    snap["release_status"] = data["release_status"]
-    path = d / "snapshots" / f"{a.label}.json"
-    if path.exists():
+    count_issues(snap, data, repo)
+    if (d / "snapshots" / f"{a.label}.json").exists():
         print(f"note: overwriting snapshot {a.label}", file=sys.stderr)
-    path.write_text(json.dumps(snap, indent=2) + "\n")
+    path = write_snapshot(d, snap)
     print_scorecard(snap)
     print(f"-> {d / 'issues.json'}  ·  {path}")
 
@@ -1110,6 +1111,30 @@ def load_snapshot(d: Path, label: str) -> dict:
     return json.loads(p.read_text())
 
 
+def write_snapshot(d: Path, snap: dict) -> Path:
+    path = d / "snapshots" / f"{snap['label']}.json"
+    path.write_text(json.dumps(snap, indent=2) + "\n")
+    return path
+
+
+def count_issues(snap: dict, data: dict, repo: Path):
+    """The snapshot fields that come from issues.json rather than from the tools."""
+    still_open = open_issues(data)
+    snap["metrics"]["red_flags_open"] = sum(i["category"] == "red-flag" for i in still_open)
+    snap["metrics"]["leaks_open"] = sum(i["category"] == "leak" for i in still_open)
+    snap["open_issues"] = {s: sum(i["severity"] == s for i in still_open) for s in SEVERITIES}
+    snap["release_status"] = release_status(data, repo)
+
+
+def recount_head_snapshot(d: Path, data: dict, repo: Path):
+    """Review adds and closes issues after `measure`, so recount the snapshot taken at HEAD: the baseline
+    then includes the red flags found in review. Snapshots of older commits keep their counts."""
+    snap = latest_snapshot(d)
+    if snap and snap["commit"] == head(repo):
+        count_issues(snap, data, repo)
+        write_snapshot(d, snap)
+
+
 def latest_snapshot(d: Path, exclude: str = "") -> dict | None:
     snaps = [json.loads(p.read_text()) for p in (d / "snapshots").glob("*.json")]
     snaps = [s for s in snaps if s["label"] != exclude]
@@ -1119,6 +1144,7 @@ def latest_snapshot(d: Path, exclude: str = "") -> dict | None:
 def cmd_compare(a):
     repo = repo_root(a.repo)
     d = state_dir(repo)
+    recount_head_snapshot(d, load_issues(d), repo)
     base = load_snapshot(d, a.base)
     after = load_snapshot(d, a.to) if a.to else latest_snapshot(d, exclude=a.base)
     if after is None:
@@ -1247,6 +1273,7 @@ def cmd_report(a):
     data = load_issues(d)
     require_leak_scan(data, repo)
     save_issues(d, data, repo)  # refresh release status
+    recount_head_snapshot(d, data, repo)
     (d / "report.md").write_text(render_report(repo, data, d))
     for src in (Path(__file__).resolve(), RULES):  # lets another agent re-measure without the skill
         if src.parent != d.resolve():

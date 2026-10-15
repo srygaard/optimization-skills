@@ -295,8 +295,14 @@ def end_to_end():
         route = next(i for i in data["issues"] if i["symbol"] == "route")
         route.update(status="dismissed", note="test edit")
         data["issues"].append({**route, "id": "CX-0123abcd", "source": "ruff", "status": "open", "note": ""})
+        data["issues"].append({**route, "id": "RF-A1", "source": "agent", "category": "red-flag",
+                               "rule": "shallow-module", "status": "open", "note": ""})
         ids = {i["id"] for i in data["issues"]}
         (repo / ".cleanup/issues.json").write_text(json.dumps(data))
+        flags = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["red_flags_open"]
+        cli("report", r)
+        check(json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["red_flags_open"]
+              == flags + 1, "report counts red flags added in review into the snapshot taken at HEAD")
         loc = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"]
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
         cli("measure", r, "--label", "baseline")
