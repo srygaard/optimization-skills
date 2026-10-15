@@ -11,7 +11,7 @@
     cleanup.py report  REPO                           render REPO/.cleanup/report.md
 
 Everything is written to REPO/.cleanup/, which ignores itself in git. Secret values never reach
-stdout or any file: only a 4-character preview, the length and a hash. Tests: test_cleanup.py.
+stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_cleanup.py.
 
 Stdlib only. Analyzers run through pinned `uvx`. Betterleaks is not on PyPI, so it is downloaded once
 as a pinned release binary, checked against SHA-256 values from the release's sigstore-signed
@@ -399,6 +399,14 @@ def _internal_rule(n: int, regex: str) -> str:
 # --- leaks -----------------------------------------------------------------------------------------
 
 CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
+# public prefixes that name a token's kind; everything after them is secret
+KNOWN_PREFIX = re.compile(r"^(?:gh[pousr]_|github_pat_|hf_|sk-(?:proj-|ant-)?|xox[abprs]-|glpat-|npm_|pypi-|AKIA|ASIA|AIza)")
+
+
+def preview(secret: str) -> str:
+    """How a secret is shown: its public prefix, if it has one, and its length. Nothing of the secret part."""
+    prefix = KNOWN_PREFIX.match(secret)
+    return f"{prefix[0] if prefix else ''}… ({len(secret)} chars)"
 
 
 def head_paths(repo: Path, needles: set, tmp: Path) -> dict:
@@ -424,11 +432,10 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
         # a credential is one issue wherever it appears (it is rotated once); internal references are
         # grouped per file, which is how they get fixed
         basis = f"internal|{f['RuleID']}|{f['File']}" if internal else secret or f"path:{f['File']}"
-        key = hashlib.sha256(basis.encode()).hexdigest()
-        g = groups.setdefault(key, {
+        g = groups.setdefault(basis, {
             "rules": {}, "internal": internal, "locs": [], "fingerprints": [], "needles": set(), "paths": set(),
             "first": None, "example": (f["File"], f["StartLine"]), "matches": set(),
-            "preview": f"{secret[:4]}… ({len(secret)} chars)" if secret else "(file name)",
+            "preview": preview(secret) if secret else "(file name)",
         })
         g["rules"][f["RuleID"]] = (f.get("Attributes") or {}).get("confidence", "high")
         if internal:
@@ -439,15 +446,19 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
         g["paths"].add(f["File"])
         if secret.strip():
             g["needles"].add(secret)
-        if g["first"] is None or f.get("Date", "") < g["first"][0]:
-            g["first"] = (f.get("Date", ""), f["Commit"][:12])
+        g["first"] = min(g["first"] or (f.get("Date", ""), f["Commit"], f["File"], f["StartLine"]),
+                         (f.get("Date", ""), f["Commit"], f["File"], f["StartLine"]))
 
     # Where is it now? Betterleaks reports the commit and path that added a line, and a file may have
     # been moved since, so search HEAD's contents. A finding on a file name is at HEAD while the path is.
     hits = head_paths(repo, {n for g in groups.values() for n in g["needles"]}, tmp)
     tree = set(git(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0"))
     out = []
-    for key, g in groups.items():
+    for basis, g in groups.items():
+        # IDs come from facts about the finding, never from the secret: a hash of a short password
+        # next to its prefix and length could be brute-forced offline
+        key = (hashlib.sha256(basis.encode()).hexdigest() if g["internal"] or not g["needles"] else
+               "|".join(map(str, g["first"][1:])))
         rule = min(g["rules"], key=lambda r: (CONFIDENCE_RANK.get(g["rules"][r], 9), "generic" in r, r))
         now_in = sorted({p for n in g["needles"] for p in hits[n]} if g["needles"] else g["paths"] & tree)
         g["at_head"] = bool(now_in)
@@ -457,7 +468,7 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
         where = "at HEAD" if g["at_head"] else "only in history"
         evidence = {
             "rules": sorted(g["rules"]), "preview": g["preview"], "at_head": g["at_head"], "head_files": now_in[:10],
-            "first_commit": g["first"][1], "first_date": g["first"][0],
+            "first_commit": g["first"][1][:12], "first_date": g["first"][0],
             "occurrences": len(g["locs"]), "locations": g["locs"][:10], "fingerprints": g["fingerprints"][:10],
         }
         if g["internal"]:

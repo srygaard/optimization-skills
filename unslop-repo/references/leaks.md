@@ -40,8 +40,9 @@ confidence separates a certain credential (critical, wherever it is) from a poss
 review); internal references and large files matter most while they are at HEAD.
 
 A credential is one issue wherever it appears, because it is rotated once. Internal references are one
-issue per rule and file. Only the first 4 characters and the length of a secret are ever shown; the raw
-Betterleaks report lives in a temp dir that is deleted at once.
+issue per rule and file. Only a known public prefix (`ghp_`, `hf_`, `sk-`) and the length of a secret are ever
+shown, and issue IDs come from where it first appeared, not from its value. The raw Betterleaks report
+lives in a temp dir that is deleted at once.
 
 ## Triage
 
