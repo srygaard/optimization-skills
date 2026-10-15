@@ -138,6 +138,27 @@ def offline():
     def broken(repo, files, index):
         raise KeyError("total_loc")
 
+    cases = [  # (file, text, strings_only), name, module, named?, mentioned?
+        (("tests/test_a.py", "net.train()\n", False), "train", "trainer", False, True),
+        (("data.py", 'load(split="train")\n', True), "train", "trainer", False, True),
+        (("configs/a.yaml", "target: pkg.trainer.train\n", False), "train", "trainer", True, False),
+        (("tests/test_b.py", "from pkg.trainer import (\n    Trainer,\n    train,\n)\n", False), "train", "trainer",
+         True, False),
+        (("pyproject.toml", 'fit = "pkg.trainer:train"\n', False), "train", "trainer", True, False),
+        (("main.py", 'cfg = {"target": "main.SetupCallback"}\n', True), "SetupCallback", "main", True, False),
+    ]
+    results = [c._named_in([ref], name, module) for ref, name, module, _, _ in cases]
+    check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
+              for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
+          "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
+                                       "    def m(self):\n        return 2\n")
+        index = c.CodeIndex(Path(tmp), ["mod.py"])
+        check(c.runtime_lines(index, "mod.py", 4) == {5} and c.runtime_lines(index, "mod.py", 8) == {12},
+              "coverage counts function and method bodies, not def or class-body lines that run on import")
+
     with tempfile.TemporaryDirectory() as tmp:
         def load(text):
             (Path(tmp) / "issues.json").write_text(text)
@@ -255,6 +276,9 @@ def normalize_b(rows):
     (root / "shared/dispatch.py").write_text(f"def dispatch(kind, x):\n{branches}\n    return x\n")
     (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
     write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
+    write("pkg/trainer.py", "def train(model, steps):\n    for _ in range(steps):\n        model.step()\n"
+          "    model.save()\n    return model\n")
+    write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account=rrg-someprof\npython -m pkg.main --data {mila}\n")
@@ -310,6 +334,8 @@ def end_to_end():
         check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
         check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
               "class named only in yaml `target:` -> dismissed")
+        check(one("dead-code", "function", symbol="train", status="open"),
+              "dead `train()` stays open although a test calls `model.train()`")
         check(one("complexity", "cc", symbol="route", source="scb-check"), "CC > 10 -> complexity issue")
         check(one("complexity", "cc", symbol="dispatch", file="pkg/shared.py"),
               "a tracked symlink to a module outside the repo is measured")

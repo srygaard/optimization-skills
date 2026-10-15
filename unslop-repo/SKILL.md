@@ -85,8 +85,9 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 
 - **Dead code:** vulture is guessing (60% confidence). Confirm nothing names the symbol: yaml
   `_target_`/`target:`, registries, `getattr`, notebooks, shell scripts. `measure` already dismisses
-  candidates named as `module.Name` (or next to their module's name) in configs, notebooks and tests, or
-  as a string literal in the code (see `note`). Methods are not listed: framework hooks (`training_step`,
+  candidates named with their module (`module.Name`, `module:name`, `from module import Name`) in configs,
+  notebooks and tests, or in a string in the code (see `note`). Bare mentions (`model.train()`,
+  `split="train"`) don't dismiss; they are listed in `evidence.mentioned_in` for you to check. Methods are not listed: framework hooks (`training_step`,
   `forward`) make them unreliable.
 - **Possible secrets** (high, "Possible secret"): look at the location, never the value. Dismiss false
   positives with a `note`. The scan ignores `gitleaks:allow` comments and the repo's own ignore files, so
@@ -142,8 +143,8 @@ SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
 - `report` copies `cleanup.py` and `leak_rules.toml` into `.cleanup/`, so another agent can re-measure
   with `.cleanup/cleanup.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
-  `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates that ran are
-  dismissed.
+  `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
+  are dismissed (def lines run on import, so they don't count).
 
 ## 6. Reference map
 
