@@ -7,8 +7,8 @@ description: >-
   keys (W&B, Hugging Face, OpenAI, Anthropic, AWS, GitHub) anywhere in git history, internal
   cluster paths, hostnames and SLURM accounts (Mila, DRAC), large checkpoints or data in history, a
   missing LICENSE, vendored code under another license, undeclared or vulnerable dependencies
-  (deptry, pip-audit), dead code (vulture), cyclomatic complexity (ruff C901), duplication, code
-  sloppiness metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
+  (deptry, pip-audit), dead code (vulture), cyclomatic complexity, duplication, code sloppiness
+  metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
   from Ousterhout's "A Philosophy of Software Design". Produces .cleanup/report.md, which another
   agent can work from, and .cleanup/issues.json, with every finding and its severity.
 ---
@@ -105,7 +105,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 | metric | source | meaning |
 |---|---|---|
 | LOC, Verbosity, Erosion, Cognitive erosion, Violation %, Clone Ratio | `scb-check` 0.2.0 | Verbosity = share of lines that are duplicated or flagged by slop rules. Erosion = share of complexity mass (CC × √SLOC) in functions with CC > 10 |
-| Functions CC > 10 | ruff C901 | the work list behind Erosion. scb-check's own CC also counts `and`/`or`, so Erosion can still include a function ruff passes |
+| Functions CC > 10 | scb-check | the work list behind Erosion: one issue per function, with its cognitive complexity as evidence. CC counts `and`/`or` and conditional expressions too |
 | Dead code LOC | vulture | unused functions and classes not named anywhere else |
 | Red flags open, Leaks open | issues.json | counts of open issues |
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
@@ -125,7 +125,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 ## 5. The script
 
 `scripts/cleanup.py` is a single PEP 723 file. It uses only the stdlib, and runs the analyzers through
-pinned `uvx`: scb-check 0.2.0, ruff 0.15.7, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1.
+pinned `uvx`: scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1.
 Betterleaks 1.9.0 is not on PyPI. The script downloads its release binary once, refuses it unless the
 SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).

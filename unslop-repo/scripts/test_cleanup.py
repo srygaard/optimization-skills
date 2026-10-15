@@ -77,6 +77,8 @@ def offline():
           "scb-check findings are parsed")
     check(found[1]["locs"] == [("/r/ldm/models/diffusion/classifier.py", 70), ("/r/ldm/models/diffusion/ddpm.py", 186)],
           "every instance of a duplicate block keeps its location")
+    check(found[2]["notes"] == ["complexity: 25, sloc: 68 (threshold: complexity > 10)"],
+          "a function's complexity and SLOC are parsed from its note line")
 
     check(c.matches("tests/test_a.py", "tests/**") and not c.matches("pkg/tests/a.py", "tests/**"),
           "'tests/**' matches only the top-level tests/")
@@ -85,22 +87,22 @@ def offline():
     check(not c.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
     def cx(symbol, severity="medium", **kw):
-        return c.issue("CX", "ruff", "complexity", "C901", severity, f"`{symbol}` is complex", file="a.py",
+        return c.issue("CX", "scb-check", "complexity", "cc", severity, f"`{symbol}` is complex", file="a.py",
                        symbol=symbol, **kw)
 
     data = {"issues": []}
     get = {}
-    c.merge(data, [cx("f"), cx("g")], {"ruff"})
+    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
     get = {i["symbol"]: i for i in data["issues"]}
     check(len(data["issues"]) == 2 and cx("f", line=3)["id"] == get["f"]["id"], "IDs don't depend on line numbers")
     get["f"].update(status="dismissed", note="deliberate")
-    c.merge(data, [cx("f"), cx("g", severity="low")], {"ruff"})
+    c.merge(data, [cx("f"), cx("g", severity="low")], {"scb-check"})
     check(get["f"]["status"] == "dismissed", "an agent's dismissal survives a re-run")
     check(get["g"]["severity"] == "low", "a field the agent didn't edit takes the tool's new value")
-    c.merge(data, [cx("f")], {"ruff"})
+    c.merge(data, [cx("f")], {"scb-check"})
     check(get["g"]["status"] == "fixed" and get["f"]["status"] == "dismissed",
           "an open issue that is no longer detected becomes fixed; a dismissed one stays dismissed")
-    c.merge(data, [cx("f"), cx("g")], {"ruff"})
+    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
     check(get["g"]["status"] == "open", "a fixed issue that is detected again reopens")
     c.merge(data, [], set())
     check(get["g"]["status"] == "open", "a tool that didn't run closes nothing")
@@ -231,8 +233,8 @@ def end_to_end():
         check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
         check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
               "class named only in yaml `target:` -> dismissed")
-        check(one("complexity", "C901", symbol="route"), "CC > 10 -> complexity issue")
-        check(one("complexity", "C901", symbol="legacy_route", severity="low")
+        check(one("complexity", "cc", symbol="route", source="scb-check"), "CC > 10 -> complexity issue")
+        check(one("complexity", "cc", symbol="legacy_route", severity="low")
               and one("dead-code", "function", symbol="legacy_route", severity="high"),
               "complex dead function -> delete it (high), don't refactor it (low)")
         check(one("red-flag", "repetition"), "duplicated block -> repetition issue")
@@ -243,9 +245,10 @@ def end_to_end():
             check(one("vulnerable-dependency", "pip-audit", symbol="requests", severity="high"),
                   "vulnerable pin -> high")
 
-        ids = {i["id"] for i in data["issues"]}
         route = next(i for i in data["issues"] if i["symbol"] == "route")
         route.update(status="dismissed", note="test edit")
+        data["issues"].append({**route, "id": "CX-0123abcd", "source": "ruff", "status": "open", "note": ""})
+        ids = {i["id"] for i in data["issues"]}
         (repo / ".cleanup/issues.json").write_text(json.dumps(data))
         loc = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"]
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
@@ -257,6 +260,8 @@ def end_to_end():
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
         check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",
               "agent edits survive a re-run")
+        check(next(i for i in data["issues"] if i["id"] == "CX-0123abcd")["status"] == "dismissed",
+              "open issues from a retired tool are dismissed")
 
         model = (repo / "pkg/model.py").read_text()
         start, end = model.index("def unused_helper"), model.index("def route")

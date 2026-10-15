@@ -47,11 +47,12 @@ BETTERLEAKS_SHA256 = {  # checksums.txt of the v1.9.0 release, signature verifie
     ("linux", "arm64"): "1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b",
     ("linux", "x64"): "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7",
 }
-TOOLS = {"scb-check": "0.2.0", "ruff": "0.15.7", "vulture": "2.16", "deptry": "0.25.1", "pip-audit": "2.10.1"}
+TOOLS = {"scb-check": "0.2.0", "vulture": "2.16", "deptry": "0.25.1", "pip-audit": "2.10.1"}
+RETIRED_SOURCES = {"ruff": "scb-check reports complexity now"}  # their open issues get dismissed
 
 # --- thresholds ------------------------------------------------------------------------------------
 
-CC_THRESHOLD = 10  # functions above this cyclomatic complexity get an issue
+CC_THRESHOLD = 10  # scb-check 0.2.0's threshold: Erosion is the share of mass in functions above it
 MEDIUM_MASS = 100  # ...medium when CC x sqrt(SLOC) reaches this (e.g. CC 15 over 45 lines), else low
 MEDIUM_DUP_LINES = 20  # duplicate groups are medium when lines x (copies - 1) reaches this, else low
 MIN_CLONE_LINES = 10  # smaller duplicate blocks still count in Clone Ratio but get no issue
@@ -66,7 +67,7 @@ REFERENCE = {"verbosity": (0.15, 0.33), "erosion": (0.31, 0.68)}
 
 SEVERITIES = ("critical", "high", "medium", "low")
 AGENT_FIELDS = ("status", "severity", "fix", "done_when", "note", "effort")
-MEASURE_SOURCES = {"scb-check", "ruff", "vulture", "deptry", "pip-audit", "license"}
+MEASURE_SOURCES = {"scb-check", "vulture", "deptry", "pip-audit", "license"}
 HERE = Path(__file__).resolve().parent
 RULES = HERE / "leak_rules.toml"
 
@@ -516,15 +517,20 @@ class CodeIndex:
 SCB_HEADER = re.compile(r"^(?:warning\[(?P<a>[\w-]+)\]|(?P<b>[\w-]+)\[warning\]|(?P<c>[\w-]+)):\s+(?P<msg>.+)$")
 SCB_LOCATION = re.compile(r"┌─\s+(?P<path>.+?):(?P<line>\d+)(?::\d+)?\s*$")
 SCB_CLONE = re.compile(r"duplicated block \((\d+) lines?, (\d+) instances?\)")
+SCB_NOTE = re.compile(r"^\s*= (?P<note>.+)$")
+SCB_CC = re.compile(r"complexity: (\d+), sloc: (\d+)")
+SCB_FUNCTION = re.compile(r"function `([^`]+)`")
 
 
 def parse_scb(text: str) -> list:
     findings = []
     for row in text.splitlines():
         if m := SCB_HEADER.match(row):
-            findings.append({"rule": m["a"] or m["b"] or m["c"], "msg": m["msg"], "locs": []})
+            findings.append({"rule": m["a"] or m["b"] or m["c"], "msg": m["msg"], "locs": [], "notes": []})
         elif (m := SCB_LOCATION.search(row)) and findings:
             findings[-1]["locs"].append((m["path"], int(m["line"])))
+        elif (m := SCB_NOTE.match(row)) and findings:
+            findings[-1]["notes"].append(m["note"])
     return findings
 
 
@@ -552,7 +558,8 @@ def scb_check(repo, files, index, snap) -> list:
         human = run([*base, "--min-duplicate-lines", MIN_CLONE_LINES], env=env).stdout
     loc = m["total_loc"] or 1
     snap["metrics"].update(
-        loc=m["total_loc"], verbosity=round(m["verbosity"], 4), erosion=round(m["erosion"], 4),
+        loc=m["total_loc"], cc_over_10=m["high_cc_functions"], verbosity=round(m["verbosity"], 4),
+        erosion=round(m["erosion"], 4),
         cog_erosion=round(m["cog_erosion"], 4), violation_pct=round(m["ast_grep_flagged_loc"] / loc, 4),
         clone_ratio=round(m["clone_loc"] / loc, 4),
         # absolute amounts behind the ratios: deleting clean code raises a ratio without adding slop
@@ -566,10 +573,17 @@ def scb_check(repo, files, index, snap) -> list:
         except ValueError:
             return path
 
-    clones, out = [], []
+    clones, complex_fns, cognitive, out = [], [], {}, []
     for f in parse_scb(human):
         locs = [(rel(path), line) for path, line in f["locs"]]
-        if f["rule"] == "duplicate-structure" and (c := SCB_CLONE.search(f["msg"])):
+        size = next((m for n in f["notes"] if (m := SCB_CC.search(n))), None)
+        if f["rule"] in ("erosion", "cog_erosion") and locs and size:
+            if f["rule"] == "erosion":
+                name = SCB_FUNCTION.search(f["msg"])
+                complex_fns.append((*locs[0], int(size[1]), int(size[2]), name[1] if name else "<function>"))
+            else:
+                cognitive[locs[0]] = int(size[1])
+        elif f["rule"] == "duplicate-structure" and (c := SCB_CLONE.search(f["msg"])):
             clones.append((int(c[1]) * (int(c[2]) - 1), int(c[1]), int(c[2]), locs))
         elif f["rule"] in ("trivial-wrapper", "low-use-short-function") and locs:
             file, line = locs[0]
@@ -595,12 +609,30 @@ def scb_check(repo, files, index, snap) -> list:
             fix=("Extract the shared block into one function, or delete the copy that is no longer used. "
                  "Pass the real differences as a few parameters."),
             done_when="scb-check no longer reports this duplicate group and the safety net passes."))
+    for file, line, cc, sloc, name in complex_fns:
+        d = index.at_def_line(file, line)
+        qual, start, end = (d[2], d[0], d[1]) if d else (name, line, line)
+        mass = cc * math.sqrt(sloc)
+        evidence = {"cc": cc, "sloc": sloc, "mass": round(mass, 1), "weight": round(mass, 1)}
+        if (file, line) in cognitive:
+            evidence["cognitive"] = cognitive[file, line]
+        out.append(issue(
+            "CX", "scb-check", "complexity", "cc", "medium" if mass >= MEDIUM_MASS else "low",
+            f"`{qual}` has cyclomatic complexity {cc} ({sloc} SLOC)",
+            file=file, symbol=qual, line=start, end_line=end, evidence=evidence,
+            effort="L" if sloc > 150 else "M",
+            fix=("Simplify the control flow: drop dead branches and flags, return early, move special cases "
+                 "out of the general path. Extracting a step with its own clear purpose is fine; moving "
+                 "branches into a helper that only this function calls, with most of its arguments, is not. "
+                 "If every branch is needed and it reads clearly, dismiss it with that reason. Add a "
+                 "characterization test first."),
+            done_when=(f"scb-check no longer lists it (CC <= {CC_THRESHOLD}), or it is gone or dismissed with "
+                       "a reason, and the safety net passes.")))
     return out
 
 
-# --- measure: ruff, vulture ------------------------------------------------------------------------
+# --- measure: vulture ----------------------------------------------------------------------------
 
-RUFF_C901 = re.compile(r"^`(?P<name>[^`]+)` is too complex \((?P<cc>\d+) > \d+\)$")
 VULTURE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+): (?P<msg>unused (?P<kind>function|class|method|property|variable|"
     r"attribute|import) '(?P<name>[^']+)'|unreachable code after '[^']+'|.+?) "
@@ -608,47 +640,6 @@ VULTURE = re.compile(
 TEXT_SUFFIXES = {".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".sh", ".bash", ".slurm", ".sbatch",
                  ".ipynb", ".jinja", ".j2"}
 DEAD_HIGH_LINES = 20  # unused symbols at least this long are high (remove before release), smaller ones low
-
-
-def ruff_cc(repo, files, index, snap) -> list:
-    if not files:
-        snap["metrics"]["cc_over_10"] = 0
-        return []
-    p = run([uvx(), f"ruff@{TOOLS['ruff']}", "check", "--isolated", "--no-cache", "--exit-zero",
-             "--ignore-noqa", "--select", "C901", "--config", f"lint.mccabe.max-complexity = {CC_THRESHOLD}",
-             "--output-format", "json", *files], cwd=repo)
-    if p.returncode:
-        raise ToolError("ruff", p.stderr.strip()[-300:])
-    rows = []
-    for r in json.loads(p.stdout):
-        m = RUFF_C901.match(r["message"]) if r["code"] == "C901" else None
-        if not m:
-            continue
-        file = Path(r["filename"]).resolve().relative_to(repo).as_posix()
-        d = index.at_def_line(file, r["location"]["row"])
-        start, end, qual = (d[0], d[1], d[2]) if d else (r["location"]["row"],) * 2 + (m["name"],)
-        sloc = max(index.sloc(file, start, end), 1)
-        cc = int(m["cc"])
-        rows.append((cc * math.sqrt(sloc), cc, sloc, file, qual, start, end))
-    snap["metrics"]["cc_over_10"] = len(rows)
-    if index.syntax_errors:
-        snap["not_measured"]["cc_partial"] = f"syntax errors in {len(index.syntax_errors)} files"
-    out = []
-    for mass, cc, sloc, file, qual, start, end in rows:
-        out.append(issue(
-            "CX", "ruff", "complexity", "C901", "medium" if mass >= MEDIUM_MASS else "low",
-            f"`{qual}` has cyclomatic complexity {cc} ({sloc} SLOC)",
-            file=file, symbol=qual, line=start, end_line=end,
-            evidence={"cc": cc, "sloc": sloc, "mass": round(mass, 1), "weight": round(mass, 1)},
-            effort="L" if sloc > 150 else "M",
-            fix=("Simplify the control flow: drop dead branches and flags, return early, move special cases "
-                 "out of the general path. Extracting a step with its own clear purpose is fine; moving "
-                 "branches into a helper that only this function calls, with most of its arguments, is not. "
-                 "If every branch is needed and it reads clearly, dismiss it with that reason. Add a "
-                 "characterization test first."),
-            done_when=(f"ruff reports CC <= {CC_THRESHOLD} for it (or it is gone, or dismissed with a reason), "
-                       "and the safety net passes.")))
-    return out
 
 
 def _references(repo: Path, shipped: list) -> list:
@@ -970,7 +961,7 @@ def count_suppressions(repo: Path, files: list) -> int:
 
 # --- measure ---------------------------------------------------------------------------------------
 
-STEPS = (("scb-check", scb_check), ("ruff", ruff_cc), ("vulture", vulture_dead),
+STEPS = (("scb-check", scb_check), ("vulture", vulture_dead),
          ("deptry", deptry_deps), ("pip-audit", pip_audit_vulns), ("license", license_readme))
 
 
@@ -1006,8 +997,13 @@ def cmd_measure(a):
             snap["not_measured"][e.tool] = str(e) or "failed"
             failed.add(name)
     snap["metrics"]["suppressions"] = count_suppressions(repo, files)
+    if index.syntax_errors:
+        snap["not_measured"]["parse"] = f"{len(index.syntax_errors)} files don't parse: {index.syntax_errors[:3]}"
     mark_inside_dead_code(found)
     merge(data, found, MEASURE_SOURCES - failed)
+    for i in open_issues(data):
+        if i.get("source") in RETIRED_SOURCES:
+            i["status"], i["note"] = "dismissed", f"no longer checked: {RETIRED_SOURCES[i['source']]}"
     data["tools"].update(TOOLS)
     save_issues(d, data, repo)
     snap["metrics"]["red_flags_open"] = len([i for i in open_issues(data) if i["category"] == "red-flag"])
