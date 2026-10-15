@@ -118,7 +118,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   flagged LOC, mass in high-CC functions, suppressions. A warning after a refactor means it added slop.
 - **Erosion and verbosity predict maintenance cost, not bugs** (paper, Appendix G). Net LOC is the
   simplest honest signal: most cleanup commits should delete more than they add.
-- **"not measured" is not zero.** deptry needs `pyproject.toml` dependencies or a `requirements.txt`;
+- **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues. deptry needs `pyproject.toml` dependencies or a `requirements.txt`;
   pip-audit needs a pinned source (`uv.lock`, `pylock.toml`, pinned requirements, `.venv`). It never
   resolves unpinned requirements, which can mean multi-GB torch downloads.
 

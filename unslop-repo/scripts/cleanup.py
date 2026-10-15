@@ -37,6 +37,7 @@ import tomllib
 import urllib.request
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import NamedTuple
 
 # --- pinned tools ----------------------------------------------------------------------------------
 
@@ -67,7 +68,6 @@ REFERENCE = {"verbosity": (0.15, 0.33), "erosion": (0.31, 0.68)}
 
 SEVERITIES = ("critical", "high", "medium", "low")
 AGENT_FIELDS = ("status", "severity", "fix", "done_when", "note", "effort")
-MEASURE_SOURCES = {"scb-check", "vulture", "deptry", "pip-audit", "license"}
 HERE = Path(__file__).resolve().parent
 RULES = HERE / "leak_rules.toml"
 
@@ -75,16 +75,25 @@ RULES = HERE / "leak_rules.toml"
 
 
 class ToolError(Exception):
-    """A tool could not run; its metrics are recorded as not measured."""
-
-    def __init__(self, tool: str, message: str):
-        super().__init__(message)
-        self.tool = tool
+    """A tool could not measure: it failed, or printed something this script doesn't recognize."""
 
 
-def die(message: str, code: int = 2):
-    print(f"error: {message}", file=sys.stderr)
-    sys.exit(code)
+class CleanupError(Exception):
+    """Stops the command; main() prints the message."""
+
+
+class Result(NamedTuple):
+    """What a measure step found. A step with nothing to read sets `skipped`: it measured nothing, so its
+    earlier issues stay open instead of being closed as fixed."""
+
+    issues: list
+    metrics: dict
+    skipped: str = ""
+    notes: dict | None = None  # metric -> why it is incomplete
+
+
+def die(message: str):
+    raise CleanupError(message)
 
 
 def run(cmd, **kwargs) -> subprocess.CompletedProcess:
@@ -548,7 +557,7 @@ def parse_scb(text: str) -> list:
     return findings
 
 
-def scb_check(repo, files, index, snap) -> list:
+def scb_check(repo, files, index) -> Result:
     with tempfile.TemporaryDirectory(prefix="cleanup-scb-") as tmp:
         # scb-check walks a directory, so it would also read untracked files and other languages: give it
         # a copy of exactly the files in scope
@@ -566,26 +575,33 @@ def scb_check(repo, files, index, snap) -> list:
         env = {**os.environ, "PATH": f"{shim.parent}{os.pathsep}{os.environ.get('PATH', '')}"}
         base = [uvx(), f"scb-check@{TOOLS['scb-check']}", "check", src, "--config", config]
         p = run([*base, "--output-format", "json"], env=env)
-        if p.returncode not in (0, 1):
-            raise ToolError("scb-check", p.stderr.strip()[-300:])
+        h = run([*base, "--min-duplicate-lines", MIN_CLONE_LINES], env=env)
+        for q in (p, h):
+            if q.returncode not in (0, 1):  # 1 only means findings
+                raise ToolError(q.stderr.strip()[-300:])
         m = json.loads(p.stdout)
-        human = run([*base, "--min-duplicate-lines", MIN_CLONE_LINES], env=env).stdout
+        out = scb_issues(h.stdout, src, index, m["high_cc_functions"])
     loc = m["total_loc"] or 1
-    snap["metrics"].update(
+    metrics = dict(
         loc=m["total_loc"], cc_over_10=m["high_cc_functions"], verbosity=round(m["verbosity"], 4),
-        erosion=round(m["erosion"], 4),
-        cog_erosion=round(m["cog_erosion"], 4), violation_pct=round(m["ast_grep_flagged_loc"] / loc, 4),
-        clone_ratio=round(m["clone_loc"] / loc, 4),
+        erosion=round(m["erosion"], 4), cog_erosion=round(m["cog_erosion"], 4),
+        violation_pct=round(m["ast_grep_flagged_loc"] / loc, 4), clone_ratio=round(m["clone_loc"] / loc, 4),
         # absolute amounts behind the ratios: deleting clean code raises a ratio without adding slop
         verbosity_flagged_loc=m["verbosity_flagged_loc"], high_cc_mass=round(m["high_cc_mass"], 1))
-    if "ast-grep" in p.stderr:  # no ast-grep binary worked: the slop rules silently counted nothing
-        snap["not_measured"]["violation_pct"] = "ast-grep did not run"
+    # no ast-grep binary worked: the slop rules silently counted nothing
+    return Result(out, metrics, notes={"violation_pct": "ast-grep did not run"} if "ast-grep" in p.stderr else None)
 
+
+def scb_issues(text: str, src: Path, index, high_cc: int) -> list:
+    """Duplicate blocks, trivial wrappers and complex functions from scb-check's human output. Raises
+    ToolError when it doesn't parse as expected, so a changed format can't read as "all fixed"."""
     clones, complex_fns, cognitive, out = [], [], {}, []
-    for f in parse_scb(human):
+    for f in parse_scb(text):
         locs = [(rel(src, path), line) for path, line in f["locs"]]
+        if not locs and f["rule"] in ("erosion", "duplicate-structure", "trivial-wrapper", "low-use-short-function"):
+            raise ToolError(f"no location parsed for {f['rule']}: {f['msg'][:80]}")
         size = next((m for n in f["notes"] if (m := SCB_CC.search(n))), None)
-        if f["rule"] in ("erosion", "cog_erosion") and locs and size:
+        if f["rule"] in ("erosion", "cog_erosion") and size:
             if f["rule"] == "erosion":
                 name = SCB_FUNCTION.search(f["msg"])
                 complex_fns.append((*locs[0], int(size[1]), int(size[2]), name[1] if name else "<function>"))
@@ -593,7 +609,7 @@ def scb_check(repo, files, index, snap) -> list:
                 cognitive[locs[0]] = int(size[1])
         elif f["rule"] == "duplicate-structure" and (c := SCB_CLONE.search(f["msg"])):
             clones.append((int(c[1]) * (int(c[2]) - 1), int(c[1]), int(c[2]), locs))
-        elif f["rule"] in ("trivial-wrapper", "low-use-short-function") and locs:
+        elif f["rule"] in ("trivial-wrapper", "low-use-short-function"):
             file, line = locs[0]
             name = (index.at_def_line(file, line) or (0, 0, "<module>"))[2]
             flag ="pass-through-method" if f["rule"] == "trivial-wrapper" else "shallow-module"
@@ -603,6 +619,9 @@ def scb_check(repo, files, index, snap) -> list:
                 fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
                      "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
                 done_when="scb-check no longer reports it (or it is dismissed), and the safety net passes."))
+    if len(complex_fns) != high_cc:
+        raise ToolError(f"output not recognized: its JSON counts {high_cc} functions with CC > {CC_THRESHOLD}, "
+                        f"{len(complex_fns)} were parsed")
     for weight, lines, count, locs in clones:
         members = sorted({(file, index.qualname(file, line)) for file, line in locs})
         where = ", ".join(f"{file}:{line}" for file, line in locs[:4])
@@ -683,24 +702,34 @@ def _named_in(refs: list, name: str, module: str) -> list:
     return hits
 
 
-def vulture_dead(repo, files, index, snap) -> list:
+def vulture_rows(text: str) -> list:
+    """vulture's report lines as regex matches. An unrecognized line raises ToolError instead of being
+    skipped, so a changed format can't read as "no dead code"."""
+    rows = []
+    for row in text.splitlines():
+        if row.strip():
+            if not (m := VULTURE.match(row)):
+                raise ToolError(f"output not recognized: {row[:120]}")
+            rows.append(m)
+    return rows
+
+
+def vulture_dead(repo, files, index) -> Result:
     if not files:
-        snap["metrics"]["dead_code_loc"] = 0
-        return []
+        return Result([], {"dead_code_loc": 0})
     p = run([uvx(), f"vulture@{TOOLS['vulture']}", *files, "--min-confidence", "60", "--sort-by-size"], cwd=repo)
     if p.returncode not in (0, 3):
-        raise ToolError("vulture", (p.stderr or p.stdout).strip()[-300:])
+        raise ToolError((p.stderr or p.stdout).strip()[-300:])
     refs = _references(repo, files)
     coverage = {}
     if (cov := repo / "coverage.json").exists():  # optional: a coverage.py JSON report from any run
         for name, f in json.loads(cov.read_text()).get("files", {}).items():
             coverage[Path(name).as_posix()] = set(f.get("executed_lines", []))
     total, out = 0, []
-    for row in p.stdout.splitlines():
-        m = VULTURE.match(row)
+    for m in vulture_rows(p.stdout):
         # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
         # training_step, nn.Module overrides) that vulture can't see being called
-        if not m or m["kind"] in ("method", "property", "variable", "attribute", "import"):
+        if m["kind"] in ("method", "property", "variable", "attribute", "import"):
             continue
         file, line, size = Path(m["path"]).as_posix(), int(m["line"]), int(m["size"] or 1)
         d = index.at_def_line(file, line)
@@ -726,8 +755,7 @@ def vulture_dead(repo, files, index, snap) -> list:
             fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
                  "notebooks, shell scripts), then delete it."),
             done_when="Deleted, and the import test and safety net pass."))
-    snap["metrics"]["dead_code_loc"] = total
-    return out
+    return Result(out, {"dead_code_loc": total})
 
 
 # --- measure: dependencies -------------------------------------------------------------------------
@@ -745,7 +773,7 @@ def _pyproject(repo: Path) -> dict:
         return {}
 
 
-def deptry_deps(repo, files, index, snap) -> list:
+def deptry_deps(repo, files, index) -> Result:
     pyproject = _pyproject(repo)
     if pyproject.get("project", {}).get("dependencies") is not None or \
             pyproject.get("tool", {}).get("poetry", {}).get("dependencies"):
@@ -753,18 +781,19 @@ def deptry_deps(repo, files, index, snap) -> list:
     elif (repo / "requirements.txt").exists():
         source = ["--requirements-files", repo / "requirements.txt"]
     else:
-        snap["not_measured"]["deptry"] = "no pyproject.toml dependencies or requirements.txt"
-        return [issue("DEPS", "deptry", "readiness", "no-dependency-list", "low",
-                      "Dependencies aren't declared in pyproject.toml or requirements.txt, so they can't be checked",
-                      key="DEPS|declare", effort="S",
-                      fix="Declare the runtime dependencies in pyproject.toml ([project].dependencies).",
-                      done_when="`cleanup.py measure` runs deptry without 'not measured'.")]
+        return Result([issue(
+            "DEPS", "deptry", "readiness", "no-dependency-list", "low",
+            "Dependencies aren't declared in pyproject.toml or requirements.txt, so they can't be checked",
+            key="DEPS|declare", effort="S",
+            fix="Declare the runtime dependencies in pyproject.toml ([project].dependencies).",
+            done_when="`cleanup.py measure` runs deptry without 'not measured'.")], {},
+            skipped="no pyproject.toml dependencies or requirements.txt")
     with tempfile.TemporaryDirectory(prefix="cleanup-deptry-") as tmp:
         report = Path(tmp) / "deptry.json"
         p = run([uvx(), f"deptry@{TOOLS['deptry']}", repo, *source, "--package-module-name-map", DEPTRY_MAP,
                  "--json-output", report])
         if not report.exists():
-            raise ToolError("deptry", (p.stderr or p.stdout).strip()[-300:])
+            raise ToolError((p.stderr or p.stdout).strip()[-300:])
         violations = json.loads(report.read_text())
     out = []
     for v in violations:
@@ -779,8 +808,7 @@ def deptry_deps(repo, files, index, snap) -> list:
             v["error"]["message"], file=file, symbol=module, line=v["location"]["line"],
             fix=fixes.get(code, v["error"]["message"]), effort="S",
             done_when="deptry no longer reports it."))
-    snap["metrics"]["deps_missing"] = sum(v["error"]["code"] != "DEP002" for v in violations)
-    return out
+    return Result(out, {"deps_missing": sum(v["error"]["code"] != "DEP002" for v in violations)})
 
 
 PINNED = re.compile(r"^[A-Za-z0-9][\w.\-\[\], ]*==\s*[\w.+!-]+\s*(?:;.*)?(?:\\)?$")
@@ -792,7 +820,7 @@ def _fully_pinned(path: Path) -> bool:
     return bool(reqs) and all(PINNED.match(ln) for ln in reqs)
 
 
-def pip_audit_vulns(repo, files, index, snap) -> list:
+def pip_audit_vulns(repo, files, index) -> Result:
     with tempfile.TemporaryDirectory(prefix="cleanup-audit-") as tmp:
         source, label = None, ""
         if (repo / "uv.lock").exists() and (uv := shutil.which("uv")):
@@ -811,19 +839,19 @@ def pip_audit_vulns(repo, files, index, snap) -> list:
         if source is None and (sites := sorted(repo.glob(".venv/lib/python*/site-packages"))):
             source, label = ["--path", sites[-1]], ".venv"
         if source is None:
-            snap["not_measured"]["pip-audit"] = "no pinned source (uv.lock, pylock, pinned requirements, .venv)"
-            return [issue("DEPS", "pip-audit", "readiness", "no-pinned-dependencies", "low",
-                          "No lockfile or pinned requirements: dependencies can't be audited and installs "
-                          "aren't reproducible", key="DEPS|pin", effort="S",
-                          fix="Commit a lockfile (uv.lock) or a fully pinned requirements.txt.",
-                          done_when="`cleanup.py measure` runs pip-audit without 'not measured'.")]
+            return Result([issue(
+                "DEPS", "pip-audit", "readiness", "no-pinned-dependencies", "low",
+                "No lockfile or pinned requirements: dependencies can't be audited and installs aren't "
+                "reproducible", key="DEPS|pin", effort="S",
+                fix="Commit a lockfile (uv.lock) or a fully pinned requirements.txt.",
+                done_when="`cleanup.py measure` runs pip-audit without 'not measured'.")], {},
+                skipped="no pinned source (uv.lock, pylock, pinned requirements, .venv)")
         report = Path(tmp) / "audit.json"
         p = run([uvx(), f"pip-audit@{TOOLS['pip-audit']}", *source, "--format", "json", "-o", report,
                  "--progress-spinner", "off"])
         if p.returncode not in (0, 1) or not report.exists():
-            raise ToolError("pip-audit", p.stderr.strip()[-300:])
+            raise ToolError(p.stderr.strip()[-300:])
         deps = json.loads(report.read_text()).get("dependencies", [])
-    snap["metrics"]["pip_audit_source"] = label
     out = []
     for dep in deps:
         vulns = {v["id"]: v for v in dep.get("vulns", [])}
@@ -842,8 +870,7 @@ def pip_audit_vulns(repo, files, index, snap) -> list:
             fix=(f"Bump {dep['name']} to >= {target} in the dependency spec, then run the safety net."
                  if target else "No fixed release yet: note it, or drop the dependency if it is easy."),
             done_when=f"pip-audit reports no vulnerabilities for {dep['name']}."))
-    snap["metrics"]["vulnerable_deps"] = len(out)
-    return out
+    return Result(out, {"pip_audit_source": label, "vulnerable_deps": len(out)})
 
 
 # --- measure: license and readme -------------------------------------------------------------------
@@ -890,7 +917,7 @@ def family(spdx: str | None) -> str:
     return s
 
 
-def license_readme(repo, files, index, snap) -> list:
+def license_readme(repo, files, index) -> Result:
     out = []
     names = git(repo, "ls-tree", "--name-only", "HEAD").splitlines()
     lic_files = [n for n in names if re.fullmatch(r"(?i)(?:licen[cs]e|copying)(?:\.(?:md|txt|rst))?", n)]
@@ -922,7 +949,7 @@ def license_readme(repo, files, index, snap) -> list:
                 key="LIC|mismatch", file="pyproject.toml", effort="S",
                 fix="Make pyproject's `license` match the LICENSE file.",
                 done_when="Both name the same license."))
-    snap["metrics"]["license"] = repo_license or ("missing" if not lic_files else "unrecognized")
+    metrics = {"license": repo_license or ("missing" if not lic_files else "unrecognized")}
 
     vendored = {}
     sources = [r for r in git(repo, "ls-files", "-z").split("\0")
@@ -955,7 +982,7 @@ def license_readme(repo, files, index, snap) -> list:
             key="DOC|readme", effort="M",
             fix="Add a README: what the code does, how to install it, a minimal quickstart, how to cite it.",
             done_when="README exists and its quickstart runs."))
-    return out
+    return Result(out, metrics)
 
 
 def count_suppressions(repo: Path, files: list) -> int:
@@ -967,6 +994,28 @@ def count_suppressions(repo: Path, files: list) -> int:
 
 STEPS = (("scb-check", scb_check), ("vulture", vulture_dead),
          ("deptry", deptry_deps), ("pip-audit", pip_audit_vulns), ("license", license_readme))
+
+
+def run_steps(repo, files, index, steps=None) -> tuple:
+    """Run the measure steps: (issues, metrics, not_measured, measured). A step that fails or has nothing
+    to read is not measured, and one broken step doesn't lose the others' results."""
+    found, metrics, not_measured, measured = [], {}, {}, set()
+    for name, step in steps or STEPS:
+        try:
+            r = step(repo, files, index)
+        except Exception as e:
+            not_measured[name] = str(e) if isinstance(e, (ToolError, CleanupError)) else f"error: {e!r}"
+            continue
+        for i in r.issues:
+            i["source"] = name  # merge closes issues by source
+        found += r.issues
+        metrics.update(r.metrics)
+        not_measured.update(r.notes or {})
+        if r.skipped:
+            not_measured[name] = r.skipped
+        else:
+            measured.add(name)
+    return found, metrics, not_measured, measured
 
 
 def mark_inside_dead_code(found: list):
@@ -987,24 +1036,21 @@ def cmd_measure(a):
     d = state_dir(repo)
     data = load_issues(d)
     require_leak_scan(data, repo)
+    uvx()  # fail before any step runs
     excludes = list(dict.fromkeys([*DEFAULT_EXCLUDES, *a.exclude]))
     files = shipped_files(repo, excludes)
     index = CodeIndex(repo, files)
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
     snap = {"label": a.label, "date": now(), "commit": head(repo), "dirty": dirty, "scope": excludes,
             "tools": dict(TOOLS), "files": len(files), "metrics": {}, "not_measured": {}}
-    found, failed = [], set()
-    for name, step in STEPS:
-        try:
-            found += step(repo, files, index, snap)
-        except ToolError as e:
-            snap["not_measured"][e.tool] = str(e) or "failed"
-            failed.add(name)
+    found, metrics, not_measured, measured = run_steps(repo, files, index)
+    snap["metrics"].update(metrics)
+    snap["not_measured"].update(not_measured)
     snap["metrics"]["suppressions"] = count_suppressions(repo, files)
     if index.syntax_errors:
         snap["not_measured"]["parse"] = f"{len(index.syntax_errors)} files don't parse: {index.syntax_errors[:3]}"
     mark_inside_dead_code(found)
-    merge(data, found, MEASURE_SOURCES - failed)
+    merge(data, found, measured)
     for i in open_issues(data):
         if i.get("source") in RETIRED_SOURCES:
             i["status"], i["note"] = "dismissed", f"no longer checked: {RETIRED_SOURCES[i['source']]}"
@@ -1232,7 +1278,11 @@ def main():
     p = sub.add_parser("report", help="render .cleanup/report.md")
     p.add_argument("repo")
     a = ap.parse_args()
-    {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)
+    try:
+        {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)
+    except CleanupError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
