@@ -239,6 +239,10 @@ def normalize_b(rows):
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
     sh("commit", "-qm", "demo repo")
+    (repo / "scripts").mkdir()
+    sh("mv", "train.sh", "scripts/train.sh")
+    sh("mv", "data/blob.bin", "data/weights.bin")
+    sh("commit", "-qm", "move files")
     return secrets
 
 
@@ -273,9 +277,11 @@ def end_to_end():
         check(one("leak", "huggingface-access-token", severity="critical", at_head=False),
               "secret only in history -> critical")
         check(one("leak", "github-pat", file="settings.py"), "a `gitleaks:allow` comment doesn't hide a secret")
-        check(one("internal-ref", "internal-slurm-account", severity="high"), "SLURM account -> high")
+        check(one("internal-ref", "internal-slurm-account", severity="high", file="scripts/train.sh"),
+              "SLURM account, in a file moved since -> high, at its path at HEAD")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
-        check(one("large-file", "large-file", severity="high", file="data/blob.bin"), "6 MB file -> high")
+        check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
+              "6 MB file, moved since -> high, at its path at HEAD")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
         check(one("license", "third-party-license", severity="high"), "vendored Apache header -> high")
         check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
