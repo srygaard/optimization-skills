@@ -394,8 +394,8 @@ def leak_issues(repo: Path, findings: list) -> list:
                       "rewrite history with the user's approval."))
         else:
             fix = ("Check whether this is a real credential by looking at the location; never print the "
-                   "value. If it is not, dismiss it with the reason and add its fingerprint to "
-                   "`.betterleaksignore`. If it is, rotate it and remove it as for any secret.")
+                   "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
+                   "any secret.")
         out.append(issue(
             "LEAK", "betterleaks", "leak", rule, severity,
             f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} ({where})",
@@ -442,11 +442,15 @@ def cmd_leaks(a):
     internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
     rules = RULES.read_text() + "".join(_internal_rule(n, rx) for n, rx in enumerate(internal, 1))
     with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
-        config, report = Path(tmp) / "rules.toml", Path(tmp) / "report.json"
+        config, report, mirror = Path(tmp, "rules.toml"), Path(tmp, "report.json"), Path(tmp, "scan.git")
         config.write_text(rules)
-        p = run([exe, "git", repo, "--config", config, "--report-format", "json", "--report-path", report,
+        # Trust neither allow comments nor the repo's ignore files: a key waved past a pre-commit hook is what
+        # this scan is for, and dismissals live in issues.json. Betterleaks reads ignore files from the root
+        # of the repo it scans, so it scans a bare mirror (--shared copies no objects); tmp has none either.
+        git(repo, "clone", "--quiet", "--mirror", "--shared", str(repo), str(mirror))
+        p = run([exe, "git", mirror, "--config", config, "--report-format", "json", "--report-path", report,
                  "--exit-code", "0", "--no-banner", "--no-color", "--log-level", "error",
-                 "--gitleaks-ignore-path", repo])
+                 "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
         if p.returncode or not report.exists():
             die(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
         found = leak_issues(repo, json.loads(report.read_text() or "[]"))

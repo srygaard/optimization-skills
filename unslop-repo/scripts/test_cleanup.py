@@ -152,7 +152,8 @@ def build_repo(root: Path) -> dict:
     rnd = random.Random(1234)
     letters, alnum = string.ascii_letters, string.ascii_letters + string.digits
     secrets = {"github": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
-               "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34))}
+               "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34)),
+               "allowed": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}
     sbatch, mila = "#SB" + "ATCH", "/net" + "work/scratch/s/student/data"  # split so this file scans clean
 
     repo = root / "repo"
@@ -232,6 +233,7 @@ def normalize_b(rows):
     (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
     write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
+    write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account=rrg-someprof\npython -m pkg.main --data {mila}\n")
     (repo / "data").mkdir()
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
@@ -270,6 +272,7 @@ def end_to_end():
         check(one("leak", "github-pat", severity="critical", at_head=True), "secret at HEAD -> critical")
         check(one("leak", "huggingface-access-token", severity="critical", at_head=False),
               "secret only in history -> critical")
+        check(one("leak", "github-pat", file="settings.py"), "a `gitleaks:allow` comment doesn't hide a secret")
         check(one("internal-ref", "internal-slurm-account", severity="high"), "SLURM account -> high")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
         check(one("large-file", "large-file", severity="high", file="data/blob.bin"), "6 MB file -> high")
@@ -319,6 +322,9 @@ def end_to_end():
         model = (repo / "pkg/model.py").read_text()
         start, end = model.index("def unused_helper"), model.index("def route")
         (repo / "pkg/model.py").write_text(model[:start] + model[end:])
+        leak = next(i for i in data["issues"] if i["category"] == "leak" and i["file"] == "config.py")
+        (repo / ".betterleaksignore").write_text("\n".join(leak["evidence"]["fingerprints"]) + "\n")
+        subprocess.run(["git", "-C", r, "add", ".betterleaksignore"], check=True)
         subprocess.run(["git", "-C", r, "commit", "-qam", "delete dead code"], check=True)
         check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
         cli("leaks", r)
@@ -326,6 +332,8 @@ def end_to_end():
         data = json.loads((repo / ".cleanup/issues.json").read_text())
         check(any(i["symbol"] == "unused_helper" and i["status"] == "fixed" for i in data["issues"]),
               "deleted dead code -> fixed")
+        check(next(i for i in data["issues"] if i["id"] == leak["id"])["status"] == "open",
+              "the repo's own .betterleaksignore doesn't hide a secret from the audit")
         p = cli("compare", r, "baseline")
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
         p = cli("report", r)

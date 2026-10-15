@@ -89,7 +89,8 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   as a string literal in the code (see `note`). Methods are not listed: framework hooks (`training_step`,
   `forward`) make them unreliable.
 - **Possible secrets** (high, "Possible secret"): look at the location, never the value. Dismiss false
-  positives with a `note` and add the `evidence.fingerprints` lines to `.betterleaksignore`.
+  positives with a `note`. The scan ignores `gitleaks:allow` comments and the repo's own ignore files, so
+  a key someone waved past a hook still shows up.
 - **Red flags:** review the exposed code (entry points, public API, core model and training modules) and
   the files that hold the medium issues. Add an issue for each red flag worth fixing:
   [red-flags.md](references/red-flags.md). After the phase, review the same files again.
