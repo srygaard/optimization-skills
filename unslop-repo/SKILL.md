@@ -130,8 +130,9 @@ Betterleaks 1.9.0 is not on PyPI. The script downloads its release binary once, 
 SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
-- `./cleanup.py --selftest` builds a throwaway repo with one known instance of each finding and checks
-  all of them, including that no secret value reaches any output.
+- `scripts/test_cleanup.py` checks the parsers and bookkeeping offline (`--offline`, a second), then
+  builds a throwaway repo with one known instance of each finding and checks all of them, including
+  that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
 - `report` copies `cleanup.py` and `leak_rules.toml` into `.cleanup/`, so another agent can re-measure
   with `.cleanup/cleanup.py` without this skill.

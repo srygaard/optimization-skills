@@ -9,10 +9,9 @@
     cleanup.py measure REPO [--label L] [--exclude G]  metrics snapshot + mechanical issues
     cleanup.py compare REPO BASE [--to LABEL]         before/after table and regression warnings
     cleanup.py report  REPO                           render REPO/.cleanup/report.md
-    cleanup.py --selftest
 
 Everything is written to REPO/.cleanup/, which ignores itself in git. Secret values never reach
-stdout or any file: only a 4-character preview, the length and a hash.
+stdout or any file: only a 4-character preview, the length and a hash. Tests: test_cleanup.py.
 
 Stdlib only. Analyzers run through pinned `uvx`. Betterleaks is not on PyPI, so it is downloaded once
 as a pinned release binary, checked against SHA-256 values from the release's sigstore-signed
@@ -1203,190 +1202,10 @@ def cmd_report(a):
     print(f"-> {d / 'report.md'}")
 
 
-# --- selftest --------------------------------------------------------------------------------------
-
-def _selftest_repo(root: Path) -> dict:
-    """A small repo with one known instance of each finding. Fake secrets are built at runtime."""
-    import random
-    import string
-    rnd = random.Random(1234)
-    letters, alnum = string.ascii_letters, string.ascii_letters + string.digits
-    secrets = {"github": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
-               "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34))}
-
-    def write(rel, text):
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text(text)
-
-    def sh(*cmd):
-        subprocess.run(["git", "-C", str(root), *cmd], check=True, capture_output=True)
-
-    sh("init", "-q")
-    sh("config", "user.email", "selftest@example.com")
-    sh("config", "user.name", "selftest")
-    write("old_key.py", f'HF_TOKEN = "{secrets["hf"]}"\n')
-    sh("add", "-A")
-    sh("commit", "-qm", "add a key that will only live in history")
-    sh("rm", "-q", "old_key.py")
-    branches = "\n".join(f"    {'if' if n == 0 else 'elif'} kind == 'k{n}':\n        return x + {n}" for n in range(12))
-    legacy = "\n".join(f"    {'if' if n == 0 else 'elif'} mode == 'm{n}':\n        y = [v * {n} for v in y]" for n in range(12))
-    body = "\n".join(f"        row = row * {n + 2} + {n}" for n in range(10))
-    write("README.md", "# demo\n")
-    write("requirements.txt", "requests==2.19.1\n")
-    write("pkg/__init__.py", "")
-    write("pkg/model.py", f"""import numpy as np
-
-
-class ConfigOnlyModel:
-    def __init__(self, width):
-        self.width = width
-
-    def forward(self, x):
-        return x * self.width
-
-
-def unused_helper(values):
-    total = 0
-    for v in values:
-        total += v
-    return total / max(len(values), 1)
-
-
-def route(kind, x):
-{branches}
-    return np.zeros(1)
-
-
-def legacy_route(mode, y):
-{legacy}
-    return y
-
-
-def normalize_a(rows):
-    out = []
-    for row in rows:
-{body}
-        out.append(row)
-    return out
-
-
-def normalize_b(rows):
-    out = []
-    for row in rows:
-{body}
-        out.append(row)
-    return out
-""")
-    write("pkg/vendored.py", "# Copyright 2020 Other Org\n# Licensed under the Apache License, Version 2.0\n\n"
-          "def borrowed(x):\n    return x\n")
-    write("pkg/main.py", "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.vendored import borrowed\n\n\n"
-          "def main():\n    print(route('k1', 1), normalize_a([1]), normalize_b([2]), borrowed(3))\n\n\n"
-          "if __name__ == '__main__':\n    main()\n")
-    write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
-    write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
-    write("train.sh", "#!/bin/bash\n#SBATCH --account=rrg-someprof\npython -m pkg.main --data /network/scratch/s/student/data\n")
-    (root / "data").mkdir()
-    (root / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
-    sh("add", "-A")
-    sh("commit", "-qm", "demo repo")
-    return secrets
-
-
-def selftest() -> int:
-    failures = []
-
-    def check(cond, what):
-        print(f"  {'ok  ' if cond else 'FAIL'} {what}")
-        if not cond:
-            failures.append(what)
-
-    def cli(*args):
-        p = subprocess.run([sys.executable, str(Path(__file__).resolve()), *args], capture_output=True, text=True)
-        transcript.append(p.stdout + p.stderr)
-        return p
-
-    check(not tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
-    transcript = []
-    with tempfile.TemporaryDirectory(prefix="cleanup-selftest-") as tmp:
-        repo = Path(tmp)
-        secrets = _selftest_repo(repo)
-        check(cli("measure", tmp).returncode != 0, "measure refuses to run before the leak scan")
-        p = cli("leaks", tmp)
-        check(p.returncode == 0, f"leaks runs ({p.stderr.strip()[-200:]})")
-        p = cli("measure", tmp, "--label", "baseline")
-        check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
-        by = {}
-        for i in data["issues"]:
-            by.setdefault((i["category"], i["rule"]), []).append(i)
-
-        def one(category, rule, **want):
-            items = by.get((category, rule), [])
-            return any(all(i.get(k) == v or i.get("evidence", {}).get(k) == v for k, v in want.items())
-                       for i in items)
-
-        check(one("leak", "github-pat", severity="critical", at_head=True), "secret at HEAD -> critical")
-        check(one("leak", "huggingface-access-token", severity="critical", at_head=False),
-              "secret only in history -> critical")
-        check(one("internal-ref", "internal-slurm-account", severity="high"), "SLURM account -> high")
-        check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
-        check(one("large-file", "large-file", severity="high", file="data/blob.bin"), "6 MB file -> high")
-        check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
-        check(one("license", "third-party-license", severity="high"), "vendored Apache header -> high")
-        check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
-        check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
-              "class named only in yaml `target:` -> dismissed")
-        check(one("complexity", "C901", symbol="route"), "CC > 10 -> complexity issue")
-        check(one("complexity", "C901", symbol="legacy_route", severity="low")
-              and one("dead-code", "function", symbol="legacy_route", severity="high"),
-              "complex dead function -> delete it (high), don't refactor it (low)")
-        check(one("red-flag", "repetition"), "duplicated block -> repetition issue")
-        check(one("readiness", "DEP001", symbol="numpy", severity="high"), "undeclared numpy -> high")
-        if "pip-audit" in json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["not_measured"]:
-            print("  skip pip-audit check (offline?)")
-        else:
-            check(one("vulnerable-dependency", "pip-audit", symbol="requests", severity="high"),
-                  "vulnerable pin -> high")
-
-        ids = {i["id"] for i in data["issues"]}
-        route = next(i for i in data["issues"] if i["symbol"] == "route")
-        route.update(status="dismissed", note="selftest edit")
-        (repo / ".cleanup/issues.json").write_text(json.dumps(data))
-        cli("measure", tmp, "--label", "baseline")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
-        check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
-        check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",
-              "agent edits survive a re-run")
-
-        model = (repo / "pkg/model.py").read_text()
-        start, end = model.index("def unused_helper"), model.index("def route")
-        (repo / "pkg/model.py").write_text(model[:start] + model[end:])
-        subprocess.run(["git", "-C", tmp, "commit", "-qam", "delete dead code"], check=True)
-        check(cli("measure", tmp, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
-        cli("leaks", tmp)
-        cli("measure", tmp, "--label", "after")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
-        check(any(i["symbol"] == "unused_helper" and i["status"] == "fixed" for i in data["issues"]),
-              "deleted dead code -> fixed")
-        p = cli("compare", tmp, "baseline")
-        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
-        p = cli("report", tmp)
-        report = (repo / ".cleanup/report.md").read_text()
-        check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
-        check((repo / ".cleanup/cleanup.py").exists(), "report copies cleanup.py for handoff")
-        files = [p.read_text(errors="replace") for p in (repo / ".cleanup").rglob("*") if p.is_file()]
-        leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
-        check(not leaked, f"no plaintext secret in output or .cleanup/ {leaked or ''}")
-    print("selftest:", "FAILED " + str(len(failures)) if failures else "passed")
-    return 1 if failures else 0
-
-
 # --- cli -------------------------------------------------------------------------------------------
 
 
 def main():
-    if sys.argv[1:] == ["--selftest"]:
-        sys.exit(selftest())
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("leaks", help="scan the full git history for secrets, internal refs and large files")
