@@ -1,0 +1,91 @@
+# Leaks: secrets, internal references, large files
+
+A credential that reaches a public repo is compromised: forks, clones and caches keep it after you
+delete it. That is why the scan is mandatory and runs first.
+
+## What `cleanup.py leaks` scans
+
+- **The full git history:** every commit on every ref (`betterleaks git`), so a key deleted three years
+  ago is still found.
+- **Large blobs** (> 5 MB) anywhere in history: checkpoints, datasets, pickles, gifs.
+- **Not scanned:** untracked files (the script warns; commit or ignore them and re-run), Git LFS content,
+  submodules, and anything outside git (wandb runs, checkpoints on disk, Hugging Face model cards).
+
+## Rules
+
+`scripts/leak_rules.toml` extends Betterleaks' ~460 built-in rules. Those already cover OpenAI,
+Anthropic, Hugging Face, Weights & Biases, AWS, GCP (incl. service-account JSON), GitHub, Slack,
+private keys, JWTs and URLs with embedded passwords. The file adds:
+
+- **ML credentials** the built-ins miss: Kaggle (`kaggle.json`, `KAGGLE_KEY`), Comet, Neptune, `.netrc`
+  password entries.
+- **Sensitive file names:** `.env`, `.netrc`, `kaggle.json`, SSH keys, `*.pem`, `.aws/credentials`.
+- **Internal references** (tag `internal`): Mila paths (`/network/scratch`, `/home/mila`), DRAC paths
+  (`/project/def-…`), `#SBATCH --account`, lab hostnames and emails, wandb entities, absolute home paths.
+
+Add repo-specific patterns with `--internal REGEX` (Go RE2 syntax, no lookarounds); they are remembered.
+To change the file itself:
+- **Capture paths without their leading `/`.** The built-in global filter drops matches that are whole
+  `/home/...` or `/Users/...` paths.
+- **Use a `filter` expression** (true means drop the finding). Betterleaks 1.9 doesn't apply
+  `[[rules.allowlists]]`.
+- **Check it:** `betterleaks config check --config leak_rules.toml`.
+
+## Severity
+
+| finding | severity |
+|---|---|
+| credential rule with confidence high or medium, at HEAD or only in history | critical |
+| low-confidence rule (`generic-api-key`, `generic-password`, sensitive file name): "Possible secret" | high, review |
+| internal reference at HEAD | high |
+| internal reference only in history | low |
+| file > 5 MB at HEAD / only in history | high / medium |
+
+A credential is one issue wherever it appears, because it is rotated once. Internal references are one
+issue per rule and file. Only the first 4 characters and the length of a secret are ever shown; the raw
+Betterleaks report lives in a temp dir that is deleted at once.
+
+## Triage
+
+- Look at the location (`file`, `line`, `evidence.locations`); never print the matched value.
+- Typical false positives in ML repos: dataset checksums, git SHAs in configs, wandb run IDs, base64
+  test fixtures, example keys in docs.
+- **False positive:** set `status` to `dismissed` with a `note`, and append the issue's
+  `evidence.fingerprints` lines to `.betterleaksignore` at the repo root, so Betterleaks skips them.
+
+## Remediation, in this order
+
+1. **Rotate first.** The user revokes or rotates every confirmed credential at its provider. The agent
+   lists rule, location and provider; it can't do this step. Anything ever pushed to any remote,
+   including a private one, is compromised.
+2. **Remove it from HEAD.** Read secrets from environment variables; add a `.env.example` and gitignore
+   `.env`. Replace internal paths with config values or CLI arguments.
+3. **Decide on history.** Ask the user early; it changes which findings matter.
+   - **Fresh, squashed history (recommended):** publish a new repo whose first commit is the cleaned
+     tree. History-only findings (except rotated credentials) then don't ship.
+   - **Rewrite history:** `uvx git-filter-repo --replace-text expressions.txt` (or `--path` to drop
+     large files), only with the user's explicit approval. Rewriting changes every SHA; forks and
+     GitHub's caches keep the old objects. The agent never force-pushes.
+4. **Prevent recurrence:** a secret-scanning pre-commit hook (`betterleaks git --pre-commit --staged`),
+   a CI job running the same scan, and GitHub push protection once the repo is public.
+5. **Re-scan** with `cleanup.py leaks` and the same rules.
+
+## Betterleaks binary
+
+`cleanup.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
+x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the value in the script, and
+caches it in `~/.cache/unslop-repo/` (or `$XDG_CACHE_HOME`).
+
+- **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
+  `BETTERLEAKS=/path/to/betterleaks`.
+- **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
+  verify the signature, then update `BETTERLEAKS_VERSION` and the four SHA-256 values in the script:
+
+  ```bash
+  uvx sigstore verify github --bundle checksums.txt.sigstore.json --repository betterleaks/betterleaks \
+    --cert-identity "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+    checksums.txt
+  ```
+
+- **Never pass `--validation`.** It sends candidate secrets to provider APIs to test them. Every
+  confirmed credential gets rotated anyway, so knowing whether it is live changes nothing.
