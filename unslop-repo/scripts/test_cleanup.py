@@ -247,7 +247,12 @@ def end_to_end():
         route = next(i for i in data["issues"] if i["symbol"] == "route")
         route.update(status="dismissed", note="test edit")
         (repo / ".cleanup/issues.json").write_text(json.dumps(data))
+        loc = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"]
+        (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
         cli("measure", tmp, "--label", "baseline")
+        (repo / "scratch.py").unlink()
+        check(json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"] == loc,
+              "untracked files are not measured")
         data = json.loads((repo / ".cleanup/issues.json").read_text())
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
         check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",

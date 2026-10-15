@@ -530,13 +530,21 @@ def parse_scb(text: str) -> list:
 
 def scb_check(repo, files, index, snap) -> list:
     with tempfile.TemporaryDirectory(prefix="cleanup-scb-") as tmp:
-        config = Path(tmp) / "scb-check.toml"  # absolute globs: they resolve against the config's dir
-        config.write_text("exclude = [" + ", ".join(json.dumps(f"{repo}/{g}") for g in snap["scope"]) + "]\n")
-        shim = Path(tmp) / "sg"  # a failing `sg` first on PATH makes scb-check use its bundled ast-grep
+        # scb-check walks a directory, so it would also read untracked files and other languages: give it
+        # a copy of exactly the files in scope
+        src = Path(tmp, "src").resolve()
+        src.mkdir()
+        for f in files:
+            (src / f).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(repo / f, src / f)
+        config = Path(tmp, "scb-check.toml")
+        config.write_text("")
+        shim = Path(tmp, "bin", "sg")  # a failing `sg` first on PATH makes scb-check use its bundled ast-grep
+        shim.parent.mkdir()
         shim.write_text("#!/bin/sh\nexit 1\n")
         shim.chmod(0o755)
-        env = {**os.environ, "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}"}
-        base = [uvx(), f"scb-check@{TOOLS['scb-check']}", "check", repo, "--config", config]
+        env = {**os.environ, "PATH": f"{shim.parent}{os.pathsep}{os.environ.get('PATH', '')}"}
+        base = [uvx(), f"scb-check@{TOOLS['scb-check']}", "check", src, "--config", config]
         p = run([*base, "--output-format", "json"], env=env)
         if p.returncode not in (0, 1):
             raise ToolError("scb-check", p.stderr.strip()[-300:])
@@ -554,7 +562,7 @@ def scb_check(repo, files, index, snap) -> list:
 
     def rel(path):
         try:
-            return Path(path).resolve().relative_to(repo).as_posix()
+            return Path(path).resolve().relative_to(src).as_posix()
         except ValueError:
             return path
 
