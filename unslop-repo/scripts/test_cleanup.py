@@ -12,6 +12,7 @@ The end-to-end run builds a throwaway repo with one known instance of each findi
 and internal references are assembled at runtime, so the leak scan doesn't flag this file.
 """
 
+import hashlib
 import json
 import random
 import string
@@ -333,6 +334,11 @@ def end_to_end():
         check(one("leak", "huggingface-access-token", severity="critical", at_head=False),
               "secret only in history -> critical")
         check(one("leak", "github-pat", file="settings.py"), "a `gitleaks:allow` comment doesn't hide a secret")
+        previews = {i["evidence"]["preview"] for i in data["issues"] if i["category"] == "leak"}
+        check(previews == {"ghp_… (40 chars)", "hf_… (37 chars)"}, f"previews show only the public prefix {previews}")
+        hashed = {"LEAK-" + hashlib.sha1(f"LEAK|{hashlib.sha256(v.encode()).hexdigest()}".encode()).hexdigest()[:8]
+                  for v in secrets.values()}
+        check(not hashed & {i["id"] for i in data["issues"]}, "leak IDs don't derive from the secret")
         check(one("internal-ref", "internal-slurm-account", severity="high", file="scripts/train.sh"),
               "SLURM account, in a file moved since -> high, at its path at HEAD")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
