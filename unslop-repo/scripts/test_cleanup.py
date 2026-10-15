@@ -91,7 +91,6 @@ def offline():
                        symbol=symbol, **kw)
 
     data = {"issues": []}
-    get = {}
     c.merge(data, [cx("f"), cx("g")], {"scb-check"})
     get = {i["symbol"]: i for i in data["issues"]}
     check(len(data["issues"]) == 2 and cx("f", line=3)["id"] == get["f"]["id"], "IDs don't depend on line numbers")
@@ -111,19 +110,22 @@ def offline():
 # --- end to end ------------------------------------------------------------------------------------
 
 def build_repo(root: Path) -> dict:
-    """One known instance of each finding. Returns the fake secrets."""
+    """One known instance of each finding, in root/repo. Returns the fake secrets."""
     rnd = random.Random(1234)
     letters, alnum = string.ascii_letters, string.ascii_letters + string.digits
     secrets = {"github": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
                "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34))}
     sbatch, mila = "#SB" + "ATCH", "/net" + "work/scratch/s/student/data"  # split so this file scans clean
 
+    repo = root / "repo"
+    repo.mkdir()
+
     def write(rel, text):
-        (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text(text)
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
 
     def sh(*cmd):
-        subprocess.run(["git", "-C", str(root), *cmd], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), *cmd], check=True, capture_output=True)
 
     sh("init", "-q")
     sh("config", "user.email", "selftest@example.com")
@@ -183,14 +185,18 @@ def normalize_b(rows):
 """)
     write("pkg/vendored.py", "# Copyright 2020 Other Org\n# Licensed under the Apache License, Version 2.0\n\n"
           "def borrowed(x):\n    return x\n")
-    write("pkg/main.py", "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.vendored import borrowed\n\n\n"
-          "def main():\n    print(route('k1', 1), normalize_a([1]), normalize_b([2]), borrowed(3))\n\n\n"
+    write("pkg/main.py", "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.shared import dispatch\n"
+          "from pkg.vendored import borrowed\n\n\n"
+          "def main():\n    print(route('k1', 1), normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2))\n\n\n"
           "if __name__ == '__main__':\n    main()\n")
+    (root / "shared").mkdir()  # a tracked symlink to a module outside the repo
+    (root / "shared/dispatch.py").write_text(f"def dispatch(kind, x):\n{branches}\n    return x\n")
+    (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
     write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account=rrg-someprof\npython -m pkg.main --data {mila}\n")
-    (root / "data").mkdir()
-    (root / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
+    (repo / "data").mkdir()
+    (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
     sh("commit", "-qm", "demo repo")
     return secrets
@@ -206,12 +212,13 @@ def end_to_end():
         return p
 
     with tempfile.TemporaryDirectory(prefix="cleanup-test-") as tmp:
-        repo = Path(tmp)
-        secrets = build_repo(repo)
-        check(cli("measure", tmp).returncode != 0, "measure refuses to run before the leak scan")
-        p = cli("leaks", tmp)
+        secrets = build_repo(Path(tmp))
+        repo = Path(tmp, "repo")
+        r = str(repo)
+        check(cli("measure", r).returncode != 0, "measure refuses to run before the leak scan")
+        p = cli("leaks", r)
         check(p.returncode == 0, f"leaks runs ({p.stderr.strip()[-200:]})")
-        p = cli("measure", tmp, "--label", "baseline")
+        p = cli("measure", r, "--label", "baseline")
         check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
         data = json.loads((repo / ".cleanup/issues.json").read_text())
         by = {}
@@ -234,6 +241,8 @@ def end_to_end():
         check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
               "class named only in yaml `target:` -> dismissed")
         check(one("complexity", "cc", symbol="route", source="scb-check"), "CC > 10 -> complexity issue")
+        check(one("complexity", "cc", symbol="dispatch", file="pkg/shared.py"),
+              "a tracked symlink to a module outside the repo is measured")
         check(one("complexity", "cc", symbol="legacy_route", severity="low")
               and one("dead-code", "function", symbol="legacy_route", severity="high"),
               "complex dead function -> delete it (high), don't refactor it (low)")
@@ -252,7 +261,7 @@ def end_to_end():
         (repo / ".cleanup/issues.json").write_text(json.dumps(data))
         loc = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"]
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
-        cli("measure", tmp, "--label", "baseline")
+        cli("measure", r, "--label", "baseline")
         (repo / "scratch.py").unlink()
         check(json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"] == loc,
               "untracked files are not measured")
@@ -266,16 +275,16 @@ def end_to_end():
         model = (repo / "pkg/model.py").read_text()
         start, end = model.index("def unused_helper"), model.index("def route")
         (repo / "pkg/model.py").write_text(model[:start] + model[end:])
-        subprocess.run(["git", "-C", tmp, "commit", "-qam", "delete dead code"], check=True)
-        check(cli("measure", tmp, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
-        cli("leaks", tmp)
-        cli("measure", tmp, "--label", "after")
+        subprocess.run(["git", "-C", r, "commit", "-qam", "delete dead code"], check=True)
+        check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
+        cli("leaks", r)
+        cli("measure", r, "--label", "after")
         data = json.loads((repo / ".cleanup/issues.json").read_text())
         check(any(i["symbol"] == "unused_helper" and i["status"] == "fixed" for i in data["issues"]),
               "deleted dead code -> fixed")
-        p = cli("compare", tmp, "baseline")
+        p = cli("compare", r, "baseline")
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
-        p = cli("report", tmp)
+        p = cli("report", r)
         report = (repo / ".cleanup/report.md").read_text()
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
         check((repo / ".cleanup/cleanup.py").exists(), "report copies cleanup.py for handoff")

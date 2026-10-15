@@ -105,6 +105,20 @@ def repo_root(path: str) -> Path:
     return Path(p.stdout.strip()).resolve()
 
 
+def rel(base: Path, path) -> str:
+    """`path` relative to `base`, as posix. A tracked symlink can point outside the repo, so the path as
+    written is tried before the resolved one; a path outside `base` comes back unchanged."""
+    p = Path(path)
+    if not p.is_absolute():
+        return p.as_posix()
+    for candidate in (p, p.resolve()):
+        try:
+            return candidate.relative_to(base).as_posix()
+        except ValueError:
+            pass
+    return p.as_posix()
+
+
 def head(repo: Path) -> str:
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -567,15 +581,9 @@ def scb_check(repo, files, index, snap) -> list:
     if "ast-grep" in p.stderr:  # no ast-grep binary worked: the slop rules silently counted nothing
         snap["not_measured"]["violation_pct"] = "ast-grep did not run"
 
-    def rel(path):
-        try:
-            return Path(path).resolve().relative_to(src).as_posix()
-        except ValueError:
-            return path
-
     clones, complex_fns, cognitive, out = [], [], {}, []
     for f in parse_scb(human):
-        locs = [(rel(path), line) for path, line in f["locs"]]
+        locs = [(rel(src, path), line) for path, line in f["locs"]]
         size = next((m for n in f["notes"] if (m := SCB_CC.search(n))), None)
         if f["rule"] in ("erosion", "cog_erosion") and locs and size:
             if f["rule"] == "erosion":
@@ -761,11 +769,7 @@ def deptry_deps(repo, files, index, snap) -> list:
     out = []
     for v in violations:
         code, module = v["error"]["code"], v["module"]
-        file = v["location"]["file"]
-        try:
-            file = Path(file).resolve().relative_to(repo).as_posix()
-        except ValueError:
-            pass
+        file = rel(repo, v["location"]["file"])
         fixes = {"DEP001": f"Declare the package that provides `{module}` as a dependency.",
                  "DEP002": f"Remove `{module}` from the dependencies if it is really unused.",
                  "DEP003": f"`{module}` is only installed transitively: declare it directly.",
