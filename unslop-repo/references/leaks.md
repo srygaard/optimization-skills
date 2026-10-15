@@ -50,8 +50,10 @@ Betterleaks report lives in a temp dir that is deleted at once.
 - Look at the location (`file`, `line`, `evidence.locations`); never print the matched value.
 - Typical false positives in ML repos: dataset checksums, git SHAs in configs, wandb run IDs, base64
   test fixtures, example keys in docs.
-- **False positive:** set `status` to `dismissed` with a `note`, and append the issue's
-  `evidence.fingerprints` lines to `.betterleaksignore` at the repo root, so Betterleaks skips them.
+- **False positive:** set `status` to `dismissed` with a `note`. That is all the audit needs: it
+  ignores `gitleaks:allow`/`betterleaks:allow` comments and the repo's `.betterleaksignore` and
+  `.gitleaksignore`, because a key waved past a pre-commit hook is exactly what it looks for. Put the
+  issue's `evidence.fingerprints` in `.betterleaksignore` only for the hook you add in step 4 below.
 
 ## Remediation, in this order
 
