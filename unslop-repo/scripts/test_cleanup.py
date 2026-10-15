@@ -86,8 +86,10 @@ def offline():
           "'**/' matches any depth, including none")
     check(not c.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
-    def cx(symbol, severity="medium", **kw):
-        return c.issue("CX", "scb-check", "complexity", "cc", severity, f"`{symbol}` is complex", file="a.py",
+    check(all(sev in c.SEVERITIES and when for sev, when in c.POLICY.values()), "every POLICY row has a severity")
+
+    def cx(symbol, policy="complex", **kw):
+        return c.issue("CX", "scb-check", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
                        symbol=symbol, **kw)
 
     data = {"issues": []}
@@ -95,7 +97,7 @@ def offline():
     get = {i["symbol"]: i for i in data["issues"]}
     check(len(data["issues"]) == 2 and cx("f", line=3)["id"] == get["f"]["id"], "IDs don't depend on line numbers")
     get["f"].update(status="dismissed", note="deliberate")
-    c.merge(data, [cx("f"), cx("g", severity="low")], {"scb-check"})
+    c.merge(data, [cx("f"), cx("g", policy="complex-small")], {"scb-check"})
     check(get["f"]["status"] == "dismissed", "an agent's dismissal survives a re-run")
     check(get["g"]["severity"] == "low", "a field the agent didn't edit takes the tool's new value")
     c.merge(data, [cx("f")], {"scb-check"})
@@ -151,6 +153,13 @@ def offline():
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
               for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        none = c.deptry_deps(Path(tmp), [], None)
+        Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
+        inline = c.deptry_deps(Path(tmp), ["tool.py"], None)
+        check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
+              "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
@@ -394,6 +403,8 @@ def end_to_end():
         p = cli("report", r)
         report = (repo / ".cleanup/report.md").read_text()
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
+        check("## Severity rules" in report and "- **critical:** credential" in report,
+              "report ends with the severity rules")
         check((repo / ".cleanup/cleanup.py").exists(), "report copies cleanup.py for handoff")
         files = [f.read_text(errors="replace") for f in (repo / ".cleanup").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]

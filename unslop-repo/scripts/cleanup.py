@@ -54,10 +54,11 @@ RETIRED_SOURCES = {"ruff": "scb-check reports complexity now"}  # their open iss
 # --- thresholds ------------------------------------------------------------------------------------
 
 CC_THRESHOLD = 10  # scb-check 0.2.0's threshold: Erosion is the share of mass in functions above it
-MEDIUM_MASS = 100  # ...medium when CC x sqrt(SLOC) reaches this (e.g. CC 15 over 45 lines), else low
-MEDIUM_DUP_LINES = 20  # duplicate groups are medium when lines x (copies - 1) reaches this, else low
+MEDIUM_MASS = 100  # complexity mass CC x sqrt(SLOC) from which a function is medium
+MEDIUM_DUP_LINES = 20  # duplicate-group weight lines x (copies - 1) from which it is medium
 MIN_CLONE_LINES = 10  # smaller duplicate blocks still count in Clone Ratio but get no issue
 MIN_DEAD_LINES = 5  # smaller unused symbols still count in dead-code LOC but get no issue
+DEAD_HIGH_LINES = 20  # unused symbols at least this long are high: remove them before release
 LARGE_FILE_MB = 5
 DEFAULT_EXCLUDES = (
     "tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**", ".cleanup/**",
@@ -67,6 +68,39 @@ DEFAULT_EXCLUDES = (
 REFERENCE = {"verbosity": (0.15, 0.33), "erosion": (0.31, 0.68)}
 
 SEVERITIES = ("critical", "high", "medium", "low")
+# The one place severities are set: every issue the tools find names a row, and `report` prints this
+# table into report.md, so the docs point here instead of restating it. Agents set the severity of the
+# red flags and bugs they add.
+POLICY = {
+    "credential": ("critical", "credential matched by a confident rule, at HEAD or only in history"),
+    "possible-credential": ("high", "possible credential (low-confidence rule or sensitive file name)"),
+    "internal-head": ("high", "internal path, host, email or account at HEAD"),
+    "large-file-head": ("high", f"file over {LARGE_FILE_MB} MB at HEAD"),
+    "dead-large": ("high", f"unused function or class of {DEAD_HIGH_LINES}+ lines"),
+    "license-missing": ("high", "no LICENSE file: nobody may use the code"),
+    "license-mismatch": ("high", "pyproject.toml's license differs from the LICENSE file"),
+    "license-third-party": ("high", "files under another license: keep their notices, check compatibility"),
+    "readme-missing": ("high", "no README"),
+    "deps-none": ("high", "no dependency list at all: nobody can install it"),
+    "deps-undeclared": ("high", "an import that isn't a declared dependency, or only a dev one"),
+    "vuln-fixable": ("high", "dependency with a known vulnerability and a fixed release"),
+    "large-file-history": ("medium", f"file over {LARGE_FILE_MB} MB only in history: every clone downloads it"),
+    "complex": ("medium", f"function with CC > {CC_THRESHOLD} and CC x sqrt(SLOC) >= {MEDIUM_MASS} "
+                          "(e.g. CC 15 over 45 lines)"),
+    "repetition": ("medium", f"duplicate group with lines x (copies - 1) >= {MEDIUM_DUP_LINES}"),
+    "wrapper": ("medium", "trivial wrapper or shallow function"),
+    "internal-history": ("low", "internal reference only in history: a fresh squashed history drops it"),
+    "dead-small": ("low", f"unused function or class of {MIN_DEAD_LINES}-{DEAD_HIGH_LINES - 1} lines"),
+    "complex-small": ("low", f"function with CC > {CC_THRESHOLD} and a smaller mass"),
+    "repetition-small": ("low", f"smaller duplicate group of {MIN_CLONE_LINES}+ lines"),
+    "inside-dead-code": ("low", "complexity or a red flag inside a dead-code candidate: delete that instead"),
+    "deps-unused": ("low", "declared dependency that is never imported"),
+    "deps-unreadable": ("low", "dependencies listed only where deptry can't read them (environment.yml, "
+                               "setup.py, PEP 723)"),
+    "vuln-unfixed": ("low", "known vulnerability without a fixed release"),
+    "pins-none": ("low", "no lockfile or pinned requirements: can't audit, installs aren't reproducible"),
+    "license-unrecognized": ("low", "LICENSE text not recognized"),
+}
 STATUSES = ("open", "fixed", "dismissed")
 CATEGORIES = ("leak", "internal-ref", "large-file", "license", "vulnerable-dependency", "readiness", "dead-code",
               "complexity", "red-flag", "bug")
@@ -239,13 +273,14 @@ def save_issues(d: Path, data: dict, repo: Path):
                                    f'  "defaults": {defaults}\n}}\n')
 
 
-def issue(prefix, source, category, rule, severity, summary, *, file="", symbol="", key="", line=None,
+def issue(prefix, source, category, rule, policy, summary, *, file="", symbol="", key="", line=None,
           end_line=None, evidence=None, fix="", done_when="", effort="S", status="open", note="") -> dict:
-    """One finding. IDs hash stable facts (never line numbers), so re-runs keep them."""
+    """One finding, with the severity of its POLICY row. IDs hash stable facts (never line numbers), so
+    re-runs keep them."""
     basis = key or "|".join((category, rule, file, symbol))
     return {
         "id": f"{prefix}-{hashlib.sha1(basis.encode()).hexdigest()[:8]}",
-        "source": source, "category": category, "rule": rule, "severity": severity,
+        "source": source, "category": category, "rule": rule, "severity": POLICY[policy][0],
         "file": file, "line": line, "end_line": end_line, "symbol": symbol, "summary": summary,
         "evidence": evidence or {}, "fix": fix, "done_when": done_when, "effort": effort,
         "status": status, "note": note,
@@ -429,7 +464,7 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
             more = f" and {len(g['matches']) - 1} more" if len(g["matches"]) > 1 else ""
             evidence["matches"] = sorted(g["matches"])[:20]
             out.append(issue(
-                "INT", "betterleaks", "internal-ref", rule, "high" if g["at_head"] else "low",
+                "INT", "betterleaks", "internal-ref", rule, "internal-head" if g["at_head"] else "internal-history",
                 f"Internal reference `{g['preview']}`{more} ({where})",
                 key=f"INT|{key}", file=file, line=line, evidence=evidence,
                 fix=("Replace it with a config value, CLI argument or environment variable "
@@ -438,7 +473,6 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
                 done_when="`cleanup.py leaks` no longer reports it at HEAD."))
             continue
         certain = g["rules"][rule] in ("high", "medium")
-        severity = "critical" if certain else "high"
         if certain:
             fix = ("User: revoke/rotate this credential at its provider first. "
                    + ("Then read it from an environment variable (add a `.env.example`, gitignore `.env`) "
@@ -453,7 +487,7 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
                    "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
                    "any secret.")
         out.append(issue(
-            "LEAK", "betterleaks", "leak", rule, severity,
+            "LEAK", "betterleaks", "leak", rule, "credential" if certain else "possible-credential",
             f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} ({where})",
             key=f"LEAK|{key}", file=file, line=line, evidence=evidence, fix=fix,
             done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled."))
@@ -483,7 +517,7 @@ def large_file_issues(repo: Path) -> list:
     out = []
     for path, (size, here) in sorted(sizes.items(), key=lambda kv: -kv[1][0]):
         out.append(issue(
-            "FILE", "git-history", "large-file", "large-file", "high" if here else "medium",
+            "FILE", "git-history", "large-file", "large-file", "large-file-head" if here else "large-file-history",
             f"{size / 1e6:.1f} MB file `{path}` ({'at HEAD' if here else 'only in history'})",
             file=path, evidence={"bytes": size, "at_head": here}, effort="M",
             fix=("Take it out of the repo: host weights or data elsewhere (release asset, Hugging Face Hub, "
@@ -684,7 +718,7 @@ def scb_issues(text: str, src: Path, index, high_cc: int) -> list:
             name = (index.at_def_line(file, line) or (0, 0, "<module>"))[2]
             flag ="pass-through-method" if f["rule"] == "trivial-wrapper" else "shallow-module"
             out.append(issue(
-                "RF", "scb-check", "red-flag", flag, "medium", f"{f['rule']}: {f['msg']}",
+                "RF", "scb-check", "red-flag", flag, "wrapper", f"{f['rule']}: {f['msg']}",
                 file=file, symbol=name, line=line, evidence={"scb_rule": f["rule"]}, effort="S",
                 fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
                      "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
@@ -696,7 +730,8 @@ def scb_issues(text: str, src: Path, index, high_cc: int) -> list:
         members = sorted({(file, index.qualname(file, line)) for file, line in locs})
         where = ", ".join(f"{file}:{line}" for file, line in locs[:4])
         out.append(issue(
-            "RF", "scb-check", "red-flag", "repetition", "medium" if weight >= MEDIUM_DUP_LINES else "low",
+            "RF", "scb-check", "red-flag", "repetition",
+            "repetition" if weight >= MEDIUM_DUP_LINES else "repetition-small",
             f"{lines}-line block duplicated {count}x: {where}",
             key="RF|repetition|" + "|".join(f"{f}:{q}" for f, q in members),
             file=locs[0][0], line=locs[0][1], symbol=", ".join(q for _, q in members),
@@ -714,7 +749,7 @@ def scb_issues(text: str, src: Path, index, high_cc: int) -> list:
         if (file, line) in cognitive:
             evidence["cognitive"] = cognitive[file, line]
         out.append(issue(
-            "CX", "scb-check", "complexity", "cc", "medium" if mass >= MEDIUM_MASS else "low",
+            "CX", "scb-check", "complexity", "cc", "complex" if mass >= MEDIUM_MASS else "complex-small",
             f"`{qual}` has cyclomatic complexity {cc} ({sloc} SLOC)",
             file=file, symbol=qual, line=start, end_line=end, evidence=evidence,
             effort="L" if sloc > 150 else "M",
@@ -736,7 +771,6 @@ VULTURE = re.compile(
     r"\((?P<conf>\d+)% confidence(?:, (?P<size>\d+) lines?)?\)$")
 TEXT_SUFFIXES = {".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".sh", ".bash", ".slurm", ".sbatch",
                  ".ipynb", ".jinja", ".j2"}
-DEAD_HIGH_LINES = 20  # unused symbols at least this long are high (remove before release), smaller ones low
 
 
 def _references(repo: Path, shipped: list) -> list:
@@ -834,7 +868,7 @@ def vulture_dead(repo, files, index) -> Result:
                 "executed in the coverage run" if ran else "")
         out.append(issue(
             "DEAD", "vulture", "dead-code", m["kind"] or "unreachable",
-            "high" if size >= DEAD_HIGH_LINES else "low",
+            "dead-large" if size >= DEAD_HIGH_LINES else "dead-small",
             f"{m['msg']} ({size} lines, vulture {m['conf']}% confidence)",
             file=file, symbol=qual, line=line, end_line=line + size - 1,
             evidence={"lines": size, "confidence": int(m["conf"]), "referenced_in": hits[:5],
@@ -870,11 +904,17 @@ def deptry_deps(repo, files, index) -> Result:
     elif (repo / "requirements.txt").exists():
         source = ["--requirements-files", repo / "requirements.txt"]
     else:
+        elsewhere = [n for n in ("environment.yml", "environment.yaml", "setup.py", "setup.cfg", "Pipfile")
+                     if (repo / n).exists()] + sorted(p.name for p in repo.glob("requirements?*.txt"))
+        if any("# /// script" in (repo / f).read_text(errors="replace") for f in files):
+            elsewhere.append("PEP 723 script blocks")
         return Result([issue(
-            "DEPS", "deptry", "readiness", "no-dependency-list", "low",
-            "Dependencies aren't declared in pyproject.toml or requirements.txt, so they can't be checked",
+            "DEPS", "deptry", "readiness", "no-dependency-list", "deps-unreadable" if elsewhere else "deps-none",
+            f"Dependencies are declared only in {', '.join(elsewhere)}, which deptry can't check" if elsewhere
+            else "No dependency list (pyproject.toml, requirements.txt, environment.yml): nobody can install it",
             key="DEPS|declare", effort="S",
-            fix="Declare the runtime dependencies in pyproject.toml ([project].dependencies).",
+            fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies)."
+                 + (" Self-contained PEP 723 scripts can dismiss this." if elsewhere else "")),
             done_when="`cleanup.py measure` runs deptry without 'not measured'.")], {},
             skipped="no pyproject.toml dependencies or requirements.txt")
     with tempfile.TemporaryDirectory(prefix="cleanup-deptry-") as tmp:
@@ -893,7 +933,7 @@ def deptry_deps(repo, files, index) -> Result:
                  "DEP003": f"`{module}` is only installed transitively: declare it directly.",
                  "DEP004": f"`{module}` is a dev dependency but the code imports it: move it to the main dependencies."}
         out.append(issue(
-            "DEP", "deptry", "readiness", code, "low" if code == "DEP002" else "high",
+            "DEP", "deptry", "readiness", code, "deps-unused" if code == "DEP002" else "deps-undeclared",
             v["error"]["message"], file=file, symbol=module, line=v["location"]["line"],
             fix=fixes.get(code, v["error"]["message"]), effort="S",
             done_when="deptry no longer reports it."))
@@ -929,7 +969,7 @@ def pip_audit_vulns(repo, files, index) -> Result:
             source, label = ["--path", sites[-1]], ".venv"
         if source is None:
             return Result([issue(
-                "DEPS", "pip-audit", "readiness", "no-pinned-dependencies", "low",
+                "DEPS", "pip-audit", "readiness", "no-pinned-dependencies", "pins-none",
                 "No lockfile or pinned requirements: dependencies can't be audited and installs aren't "
                 "reproducible", key="DEPS|pin", effort="S",
                 fix="Commit a lockfile (uv.lock) or a fully pinned requirements.txt.",
@@ -950,7 +990,7 @@ def pip_audit_vulns(repo, files, index) -> Result:
         target = max(fixed, key=version_key) if fixed else None
         ids = sorted(vulns)
         out.append(issue(
-            "VULN", "pip-audit", "vulnerable-dependency", "pip-audit", "high" if target else "low",
+            "VULN", "pip-audit", "vulnerable-dependency", "pip-audit", "vuln-fixable" if target else "vuln-unfixed",
             f"{dep['name']} {dep['version']}: {len(ids)} known vulnerabilities ({', '.join(ids[:3])}"
             f"{', ...' if len(ids) > 3 else ''})" + (f"; fixed in {target}" if target else "; no fix yet"),
             key=f"VULN|{dep['name'].lower()}", file=label, symbol=dep["name"],
@@ -1013,7 +1053,7 @@ def license_readme(repo, files, index) -> Result:
     repo_license = None
     if not lic_files:
         out.append(issue(
-            "LIC", "license", "license", "missing-license", "high",
+            "LIC", "license", "license", "missing-license", "license-missing",
             "No LICENSE file: without one, nobody may legally use, copy or modify the code",
             key="LIC|missing", effort="S",
             fix=("Ask the user which license to use (MIT and Apache-2.0 are common for research code; "
@@ -1024,7 +1064,7 @@ def license_readme(repo, files, index) -> Result:
         repo_license = detect_license((repo / lic_files[0]).read_text(errors="replace"))
         if repo_license is None:
             out.append(issue(
-                "LIC", "license", "license", "unrecognized-license", "low",
+                "LIC", "license", "license", "unrecognized-license", "license-unrecognized",
                 f"{lic_files[0]} doesn't match a common license (MIT, Apache-2.0, BSD, GPL, MPL)",
                 key="LIC|unrecognized", file=lic_files[0], effort="S",
                 fix="Check the text; a standard license text lets people and tools recognize it.",
@@ -1033,7 +1073,7 @@ def license_readme(repo, files, index) -> Result:
         declared = declared.get("text") if isinstance(declared, dict) else declared
         if repo_license and isinstance(declared, str) and family(declared) != family(repo_license):
             out.append(issue(
-                "LIC", "license", "license", "license-mismatch", "high",
+                "LIC", "license", "license", "license-mismatch", "license-mismatch",
                 f"pyproject.toml declares `{declared}` but {lic_files[0]} is {repo_license}",
                 key="LIC|mismatch", file="pyproject.toml", effort="S",
                 fix="Make pyproject's `license` match the LICENSE file.",
@@ -1056,7 +1096,7 @@ def license_readme(repo, files, index) -> Result:
             vendored.setdefault(found, []).append(rel)
     for fam, paths in sorted(vendored.items()):
         out.append(issue(
-            "LIC", "license", "license", "third-party-license", "high",
+            "LIC", "license", "license", "third-party-license", "license-third-party",
             f"{len(paths)} file(s) carry a {fam} license header but the repo is "
             f"{repo_license or 'unlicensed'}: {', '.join(paths[:4])}{', ...' if len(paths) > 4 else ''}",
             key=f"LIC|vendored|{fam}", file=paths[0], evidence={"files": paths[:50]}, effort="S",
@@ -1067,7 +1107,7 @@ def license_readme(repo, files, index) -> Result:
 
     if not any(re.fullmatch(r"(?i)readme(?:\.\w+)?", n) for n in names):
         out.append(issue(
-            "DOC", "license", "readiness", "missing-readme", "high", "No README at the repo root",
+            "DOC", "license", "readiness", "missing-readme", "readme-missing", "No README at the repo root",
             key="DOC|readme", effort="M",
             fix="Add a README: what the code does, how to install it, a minimal quickstart, how to cite it.",
             done_when="README exists and its quickstart runs."))
@@ -1115,7 +1155,7 @@ def mark_inside_dead_code(found: list):
             continue
         host = next((d for d in dead if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]), None)
         if host:
-            i["severity"] = "low"
+            i["severity"] = POLICY["inside-dead-code"][0]
             i["evidence"]["inside_dead_code"] = host["id"]
             i["fix"] = f"Inside dead-code candidate {host['id']}: delete that instead, unless it turns out to be used. " + i["fix"]
 
@@ -1347,7 +1387,9 @@ def render_report(repo: Path, data: dict, d: Path) -> str:
     lines += (["| ID | where | problem | reason |", "|---|---|---|---|"]
               + [f"| {i['id']} | {cell(where(i))} | {cell(i['summary'])} | {cell(i['note'])} |" for i in dismissed]
               if dismissed else ["None."])
-    lines += ["", f"Fixed so far: {len(fixed)} issue(s)."]
+    lines += ["", f"Fixed so far: {len(fixed)} issue(s).", "", "## Severity rules", "",
+              "Set by `POLICY` in cleanup.py; red flags and bugs you add keep the severity you give them.", ""]
+    lines += [f"- **{sev}:** " + "; ".join(when for s, when in POLICY.values() if s == sev) for sev in SEVERITIES]
     return "\n".join(lines) + "\n"
 
 

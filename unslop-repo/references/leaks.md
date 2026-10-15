@@ -35,13 +35,9 @@ To change the file itself:
 
 ## Severity
 
-| finding | severity |
-|---|---|
-| credential rule with confidence high or medium, at HEAD or only in history | critical |
-| low-confidence rule (`generic-api-key`, `generic-password`, sensitive file name): "Possible secret" | high, review |
-| internal reference at HEAD | high |
-| internal reference only in history | low |
-| file > 5 MB at HEAD / only in history | high / medium |
+Severities come from `POLICY` in `cleanup.py`, and every report.md ends with the list. A rule's
+confidence separates a certain credential (critical, wherever it is) from a possible one (high, to
+review); internal references and large files matter most while they are at HEAD.
 
 A credential is one issue wherever it appears, because it is rotated once. Internal references are one
 issue per rule and file. Only the first 4 characters and the length of a secret are ever shown; the raw
