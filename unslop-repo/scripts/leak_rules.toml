@@ -1,0 +1,113 @@
+# Betterleaks rules for unslop-repo: the built-in rules plus what an ML research repo needs.
+#
+# The built-in rules already cover OpenAI, Anthropic, Hugging Face, Weights & Biases, AWS, GCP (incl.
+# service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded passwords. This file
+# adds ML services they miss, sensitive file names, and internal references (tag "internal").
+#
+# Severity in cleanup.py: tag "internal" -> high; credential rules with confidence high/medium ->
+# critical; confidence low -> high (needs review). Regexes use Go RE2 syntax (no lookarounds).
+# Path rules capture without the leading "/": the built-in global filter drops matches that are
+# whole /home/... or /Users/... paths. [[rules.allowlists]] is not applied by Betterleaks 1.9; use
+# a `filter` expression (true = drop the finding) instead.
+# Repo-specific internal patterns: `cleanup.py leaks <repo> --internal REGEX`.
+
+title = "unslop-repo"
+
+[extend]
+useDefault = true
+
+# --- ML service credentials missing from the built-in rules --------------------------------------
+
+[[rules]]
+id = "kaggle-api-key"
+description = "Kaggle API key in an assignment or environment variable."
+regex = '''(?i)kaggle[_-]?(?:api[_-]?)?key["'\s]*[:=]\s*["']?([a-f0-9]{32})\b'''
+keywords = ["kaggle"]
+confidence = "high"
+
+[[rules]]
+id = "kaggle-json"
+description = "Kaggle credentials file content (kaggle.json)."
+regex = '''"username"\s*:\s*"[^"]*"\s*,\s*"key"\s*:\s*"([a-f0-9]{32})"'''
+keywords = ["username"]
+confidence = "high"
+
+[[rules]]
+id = "comet-api-key"
+description = "Comet ML API key."
+regex = '''(?i)comet[_-]?(?:ml[_-]?)?api[_-]?key["'\s]*[:=]\s*["']?([A-Za-z0-9]{20,})'''
+keywords = ["comet"]
+confidence = "medium"
+
+[[rules]]
+id = "neptune-api-token"
+description = "Neptune.ai API token (base64 JSON starting with api_address)."
+regex = '''\b(eyJhcGlfYWRkcmVzcyI6[A-Za-z0-9+/=]{20,})'''
+keywords = ["eyjhcglfywrkcmvzcyi6"]
+confidence = "high"
+
+[[rules]]
+id = "netrc-password"
+description = "Password entry in .netrc content (wandb login and others write these)."
+regex = '''(?s)\bmachine\s+\S+\s+login\s+\S+\s+password\s+(\S{8,})'''
+keywords = ["machine"]
+confidence = "medium"
+
+[[rules]]
+id = "sensitive-file"
+description = "File that usually holds credentials (.env, .netrc, kaggle.json, SSH keys, .pem, .aws/credentials)."
+path = '''(?:^|/)(?:\.env(?:\.(?:local|dev|development|prod|production|staging|test))?|[._]netrc|kaggle\.json|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.pem|\.aws/credentials)$'''
+confidence = "low"
+
+# --- Internal references (tag "internal"): fine inside the lab, wrong in a public repo ------------
+
+[[rules]]
+id = "internal-mila-path"
+description = "Mila cluster path."
+regex = '''/((?:network/(?:scratch|projects|datasets|weights|archive)|home/mila)/[\w./-]+)'''
+keywords = ["/network/", "/home/mila/"]
+confidence = "medium"
+tags = ["internal"]
+
+[[rules]]
+id = "internal-drac-path"
+description = "Digital Research Alliance of Canada (DRAC) project or scratch path."
+regex = '''/((?:project|projects|scratch|nearline)/(?:def|rrg|ctb)-[\w./-]+)'''
+keywords = ["def-", "rrg-", "ctb-"]
+confidence = "medium"
+tags = ["internal"]
+
+[[rules]]
+id = "internal-slurm-account"
+description = "SLURM allocation account."
+regex = '''#SBATCH\s+(?:-A|--account)[=\s]+(\S+)'''
+keywords = ["#sbatch"]
+confidence = "medium"
+tags = ["internal"]
+
+[[rules]]
+id = "internal-host-or-email"
+description = "Lab hostname or email address."
+regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|server\.mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
+keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
+confidence = "medium"
+tags = ["internal"]
+
+[[rules]]
+id = "internal-wandb-entity"
+description = "Weights & Biases entity (team or user name)."
+regex = '''(?i)(?:wandb_entity["'\s]*[:=]\s*["']?|entity\s*=\s*["'])([\w-]{2,})'''
+keywords = ["entity"]
+confidence = "low"
+tags = ["internal"]
+
+[[rules]]
+id = "internal-home-path"
+description = "Absolute path into someone's home directory."
+regex = '''/((?:home|Users)/[a-z][\w.-]{1,31}/[\w./-]+)'''
+keywords = ["/home/", "/users/"]
+confidence = "low"
+tags = ["internal"]
+filter = '''
+matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name)/`])
+'''
