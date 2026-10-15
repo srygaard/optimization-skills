@@ -59,12 +59,15 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 
 ## 2. Severity decides the phase
 
-| severity | meaning | default for | phase |
+| severity | meaning | for example | phase |
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
-| **high** | fix before publishing | possible secrets to review; internal paths, hosts, emails at HEAD; files > 5 MB at HEAD; unused functions and classes of 20+ lines; missing LICENSE; vendored code under another license; vulnerable dependency with a fix; undeclared dependency; missing README | High |
-| **medium** | the biggest quality wins | functions with CC > 10 and mass (CC × √SLOC) ≥ 100, e.g. CC 15 over 45 lines; duplicate groups with lines × (copies − 1) ≥ 20; trivial wrappers; red flags you add | Medium |
-| **low** | optional | smaller complexity and duplication; anything inside a dead-code candidate (delete it instead); dead code under 20 lines; unused deps; vulnerabilities without a fix; no lockfile; findings only in history (except credentials) | Low |
+| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; license problems; fixable vulnerabilities; missing dependencies or README | High |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, big files in history, red flags you add | Medium |
+| **low** | optional | smaller complexity and duplication, small dead code, other history-only findings, unused deps, no lockfile | Low |
+
+The exact rules and thresholds are `POLICY` in `scripts/cleanup.py`, the one place severities are set.
+Every report.md ends with them, so an agent working from the report sees them too.
 
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
 older than HEAD.
@@ -124,9 +127,10 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   flagged LOC, mass in high-CC functions, suppressions. A warning after a refactor means it added slop.
 - **Erosion and verbosity predict maintenance cost, not bugs** (paper, Appendix G). Net LOC is the
   simplest honest signal: most cleanup commits should delete more than they add.
-- **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues. deptry needs `pyproject.toml` dependencies or a `requirements.txt`;
-  pip-audit needs a pinned source (`uv.lock`, `pylock.toml`, pinned requirements, `.venv`). It never
-  resolves unpinned requirements, which can mean multi-GB torch downloads.
+- **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues.
+  deptry needs `pyproject.toml` dependencies or a `requirements.txt`; pip-audit needs a pinned source
+  (`uv.lock`, `pylock.toml`, pinned requirements, `.venv`). It never resolves unpinned requirements,
+  which can mean multi-GB torch downloads.
 
 ## 5. The script
 
@@ -156,6 +160,5 @@ SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
 
 ---
 
-*Thresholds (CC 10, mass 100, 20 duplicated lines, 20-line dead code) are defaults chosen to keep the
-work list short.
+*The thresholds in `POLICY` are defaults chosen to keep the work list short.
 The reference ranges come from one paper's panel of Python repos measured with its own tooling.*

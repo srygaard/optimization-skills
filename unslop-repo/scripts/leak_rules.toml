@@ -4,8 +4,8 @@
 # service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded passwords. This file
 # adds ML services they miss, sensitive file names, and internal references (tag "internal").
 #
-# Severity in cleanup.py: tag "internal" -> high; credential rules with confidence high/medium ->
-# critical; confidence low -> high (needs review). Regexes use Go RE2 syntax (no lookarounds).
+# Severity: POLICY in cleanup.py. Tag "internal" marks internal references; a rule's confidence (high or
+# medium vs low) separates certain from possible credentials. Regexes use Go RE2 syntax (no lookarounds).
 # Path rules capture without the leading "/": the built-in global filter drops matches that are
 # whole /home/... or /Users/... paths. [[rules.allowlists]] is not applied by Betterleaks 1.9; use
 # a `filter` expression (true = drop the finding) instead.
