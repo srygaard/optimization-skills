@@ -100,8 +100,10 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   the local history are all valid. `fixed` only sticks once the tools stop detecting the issue:
   re-measuring reopens a fixed issue they still see. Your edits
   survive re-runs; `grep <ID> .cleanup/issues.json` shows one issue per line.
-- **Bugs found on the way** get their own issue (`"category": "bug"`, `"source": "agent"`, ID `BUG-A1`)
-  and their own commit, never inside a refactor.
+- **Bugs found on the way** get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity`
+  and a `summary`; the rest is optional) and their own commit, never inside a refactor.
+- **Typos stop the script:** every command checks issues.json first and names any issue with an unknown
+  severity, status or category, a missing field, or a dismissal without a note.
 
 ## 4. Reading the scorecard
 

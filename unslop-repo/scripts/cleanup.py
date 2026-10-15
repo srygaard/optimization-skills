@@ -67,6 +67,11 @@ DEFAULT_EXCLUDES = (
 REFERENCE = {"verbosity": (0.15, 0.33), "erosion": (0.31, 0.68)}
 
 SEVERITIES = ("critical", "high", "medium", "low")
+STATUSES = ("open", "fixed", "dismissed")
+CATEGORIES = ("leak", "internal-ref", "large-file", "license", "vulnerable-dependency", "readiness", "dead-code",
+              "complexity", "red-flag", "bug")
+ISSUE_DEFAULTS = {"source": "agent", "rule": "", "file": "", "line": None, "end_line": None, "symbol": "",
+                  "evidence": {}, "fix": "", "done_when": "", "effort": "S", "status": "open", "note": ""}
 AGENT_FIELDS = ("status", "severity", "fix", "done_when", "note", "effort")
 HERE = Path(__file__).resolve().parent
 RULES = HERE / "leak_rules.toml"
@@ -160,9 +165,40 @@ def state_dir(repo: Path) -> Path:
 
 def load_issues(d: Path) -> dict:
     p = d / "issues.json"
-    if p.exists():
-        return json.loads(p.read_text())
-    return {"schema": 1, "repo": d.parent.name, "tools": {}, "issues": []}
+    if not p.exists():
+        return {"schema": 1, "repo": d.parent.name, "tools": {}, "issues": []}
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        die(f"{p} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .cleanup/ is not in git, so "
+            "there is no older copy")
+    check_issues(data, p)
+    return data
+
+
+def check_issues(data, path: Path):
+    """issues.json is edited by hand, so a typo must stop the command rather than drop the issue from the
+    report and the release gate. Missing optional fields get their defaults."""
+    if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list):
+        die(f"{path} must be an object with an \"issues\" list")
+    problems, seen = [], set()
+    for n, i in enumerate(data["issues"], 1):
+        ident = i.get("id") or f"issue #{n}"
+        if missing := [k for k in ("id", "category", "severity", "summary") if not i.get(k)]:
+            problems.append(f"{ident}: missing {', '.join(missing)}")
+            continue
+        for k, v in ISSUE_DEFAULTS.items():
+            i.setdefault(k, dict(v) if isinstance(v, dict) else v)
+        for k, allowed in (("severity", SEVERITIES), ("status", STATUSES), ("category", CATEGORIES)):
+            if i[k] not in allowed:
+                problems.append(f'{ident}: {k} "{i[k]}" is not one of {", ".join(allowed)}')
+        if i["status"] == "dismissed" and not i["note"]:
+            problems.append(f"{ident}: dismissed without a note saying why")
+        if ident in seen:
+            problems.append(f"{ident}: duplicate id")
+        seen.add(ident)
+    if problems:
+        die(f"{path} needs fixing by hand (`grep <ID>` finds each issue):\n  " + "\n  ".join(problems[:20]))
 
 
 def open_issues(data: dict, *severities: str) -> list:
@@ -1214,7 +1250,7 @@ HOW_TO = """\
 2. Critical leaks: the user must revoke/rotate the key first. Never print, echo or `cat` a secret; the previews here are enough.
 3. Safety net before refactoring, in its own commit under `tests/` (outside the metrics): a test that imports every module, `--help` for each entry point, and a characterization test (small synthetic inputs, pinned output) for each function you change. The tests must run in the project's real environment; if it isn't available (e.g. no torch, no GPU), ask the user before refactoring, and don't commit stubs.
 4. One issue per commit, with a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit. Delete dead code before refactoring: issues marked "Inside dead-code candidate" go away with it.
-5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"category": "bug"`, `"source": "agent"`, ID `BUG-A1`, ...) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
+5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity` and a `summary`; the other fields are optional) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
 6. No nitpicks: only change what makes the code meaningfully easier to understand, use or change. A refactor that adds lines needs a reason.
 7. Re-measure when you stop (the label is any name): `.cleanup/cleanup.py leaks .`, `.cleanup/cleanup.py measure . --label after-<what>`, `.cleanup/cleanup.py compare . baseline`, `.cleanup/cleanup.py report .` (needs uv)."""
 
