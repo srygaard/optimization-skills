@@ -4,7 +4,8 @@ import json
 import re
 from pathlib import Path
 
-from common import git, pyproject
+from utils.git import git
+from utils.pyproject import read_pyproject
 from tools.base import Result, Tool
 
 TOOL = Tool(
@@ -133,7 +134,7 @@ def measure(repo, files, index) -> Result:
 
     if not files:
         return Result([], {"dead_code_loc": 0})
-    config = pyproject(repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
+    config = read_pyproject(repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
     v = Vulture(ignore_names=config.get("ignore_names", []), ignore_decorators=config.get("ignore_decorators", []))
     v.scavenge([repo / f for f in files], exclude=config.get("exclude", []))
     # vulture resolves paths, and a tracked symlink can resolve outside the repo

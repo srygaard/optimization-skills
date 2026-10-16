@@ -5,7 +5,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import NamedTuple
 
-from common import git
+from utils.git import git
 
 
 def matches(rel: str, pattern: str) -> bool:

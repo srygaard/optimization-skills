@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from common import git, run
+from utils.git import git
+from utils.process import run
 from tools.base import Tool
 
 TOOL = Tool(

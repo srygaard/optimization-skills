@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from common import run
+from utils.process import run
 from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(

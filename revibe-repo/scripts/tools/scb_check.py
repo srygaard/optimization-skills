@@ -9,7 +9,7 @@ import tempfile
 from importlib.metadata import distribution
 from pathlib import Path
 
-from common import rel
+from utils.paths import rel
 from scope import Def
 from tools.base import Result, Tool, ToolError
 

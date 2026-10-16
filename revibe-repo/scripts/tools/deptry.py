@@ -6,7 +6,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from common import pyproject, rel, run
+from utils.paths import rel
+from utils.process import run
+from utils.pyproject import read_pyproject
 from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(
@@ -24,7 +26,7 @@ TOOL = Tool(
 
 def deptry_source(repo: Path) -> list | None:
     """deptry's arguments for the dependency list it can read: pyproject.toml, then requirements.txt."""
-    project = pyproject(repo)
+    project = read_pyproject(repo)
     if project.get("project", {}).get("dependencies") is not None or \
             project.get("tool", {}).get("poetry", {}).get("dependencies"):
         return ["--config", repo / "pyproject.toml"]

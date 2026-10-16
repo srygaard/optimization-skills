@@ -3,9 +3,10 @@
 import hashlib
 from pathlib import Path
 
-from common import Severity, git, head, now, repo_root, run
-from state import load_issues, merge, save_issues, state_dir
+from state import Severity, load_issues, merge, now, save_issues, state_dir
 from tools import betterleaks, large_files
+from utils.git import git, head, repo_root
+from utils.process import run
 
 
 def print_leaks(repo: Path, data: dict, found: list, version: str):

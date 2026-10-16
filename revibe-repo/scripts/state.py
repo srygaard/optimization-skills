@@ -1,10 +1,27 @@
 """Everything under REPO/.cleanup/: issues.json (load, check, merge, save) and the snapshots."""
 
+import datetime as dt
 import hashlib
 import json
+from enum import IntEnum
 from pathlib import Path
 
-from common import Severity, head, now
+from utils.git import head
+
+
+class Severity(IntEnum):
+    """How bad an issue is: a higher value is more severe. Members are named as issues.json spells them, most
+    severe first. Each tool's `TOOL` policy sets the severity of its issues."""
+
+    critical = 4
+    high = 3
+    medium = 2
+    low = 1
+
+
+def now() -> str:
+    """The current time as issues.json and the snapshots record it: UTC, to the second."""
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
 # --- issues.json -----------------------------------------------------------------------------------
