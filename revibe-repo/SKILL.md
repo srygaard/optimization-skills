@@ -50,15 +50,17 @@ $S/cleanup.py measure <repo> --label baseline      # 2. this commit's scorecard 
 #                                                    3. review issues.json (section 3)
 $S/cleanup.py report  <repo>                       # 4. render .revibe/report.md
 #                                                    5. the user picks a phase, or hands the report on
-#                                                    6. fix loop: safety net, one issue per commit
+#                                                    6. fix loop: safety net, one commit per family of fix
 $S/cleanup.py leaks <repo> && $S/cleanup.py measure <repo>   # 7. after each commit
 $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline against this commit
 ```
 
 - The safety net goes under `tests/`, in its own commit, before the first refactor.
-- Each fix commit has a Conventional Commits message (`refactor:`, `fix:`, `test:`, ...) and a
-  `Cleanup-Issue: <ID>` footer (see [safety-net.md](references/safety-net.md)). Run the safety net
-  after each commit; revert rather than debug forward. Delete dead code before refactoring what is left.
+- Each fix commit holds one family of fix: the issues one kind of change closes (delete the dead code,
+  replace the internal paths, name the magic thresholds, convert the string paths). It has a Conventional
+  Commits message (`refactor:`, `fix:`, `test:`, ...) and a `Cleanup-Issue: <ID>` footer for each issue it
+  closes (see [safety-net.md](references/safety-net.md)). Run the safety net after each commit; revert
+  rather than debug forward. Delete dead code before refactoring what is left.
 - Every new commit needs a new `leaks` run before `measure` or `report`. Only the first reads every
   commit; later runs read the commits added since and the files at HEAD, which takes seconds. A
   rewritten history is read again in full.
