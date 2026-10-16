@@ -44,7 +44,7 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 
 ```bash
 S=<this skill>/scripts
-$S/cleanup.py leaks   <repo> [--internal REGEX]   # 1. full-history secret scan (mandatory)
+$S/cleanup.py leaks   <repo> [--internal REGEX]   # 1. secret scan of the full history (mandatory)
 $S/cleanup.py measure <repo> --label baseline      # 2. this commit's scorecard + mechanical issues
 #                                                    3. review issues.json (section 3)
 $S/cleanup.py report  <repo>                       # 4. render .revibe/report.md
@@ -57,7 +57,9 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 - The safety net goes under `tests/`, in its own commit, before the first refactor.
 - Each fix commit carries a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit;
   revert rather than debug forward. Delete dead code before refactoring what is left.
-- Every new commit needs a new `leaks` run before `measure` or `report`. It takes seconds.
+- Every new commit needs a new `leaks` run before `measure` or `report`. Only the first reads the full
+  history; later runs read the files at HEAD, which takes seconds. A secret committed and removed between
+  two runs is never seen, so run it on every commit. After rewriting the history, run `leaks --history`.
 - `--internal REGEX` adds a repo-specific internal pattern (a lab hostname, `/checkpoint/`). Patterns
   are remembered for later scans.
 - `--exclude GLOB` on `measure` leaves paths out of the metrics. Tests and docs are excluded by default,

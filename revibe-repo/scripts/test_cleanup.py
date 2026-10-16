@@ -308,6 +308,8 @@ def end_to_end():
         p = cli("measure", r, "--label", "baseline")
         check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
         data = json.loads((repo / ".revibe/issues.json").read_text())
+        scanned = {i["id"] for i in data["issues"] if i["category"] in ("leak", "internal-ref")}
+        history_commit = data["leak_scan"]["history"]
         by = {}
         for i in data["issues"]:
             by.setdefault((i["category"], i["rule"]), []).append(i)
@@ -387,6 +389,11 @@ def end_to_end():
         leak = next(i for i in data["issues"] if i["category"] == "leak" and i["file"] == "config.py")
         (repo / ".betterleaksignore").write_text("\n".join(leak["evidence"]["fingerprints"]) + "\n")
         subprocess.run(["git", "-C", r, "add", ".betterleaksignore"], check=True)
+        train = repo / "scripts/train.sh"
+        train.write_text(train.read_text().replace("/net" + "work/scratch/s/student/data", "data/"))
+        (repo / "pkg/config.py").write_text('"""Config."""\n\n' + (repo / "config.py").read_text())
+        subprocess.run(["git", "-C", r, "rm", "-q", "config.py"], check=True)
+        subprocess.run(["git", "-C", r, "add", "pkg/config.py"], check=True)
         subprocess.run(["git", "-C", r, "commit", "-qam", "delete dead code"], check=True)
         check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
         cli("leaks", r)
@@ -398,6 +405,19 @@ def end_to_end():
               "each measured commit keeps its metrics in its own folder; re-measuring one replaces them")
         check(next(i for i in data["issues"] if i["id"] == leak["id"])["status"] == "open",
               "the repo's own .betterleaksignore doesn't hide a secret from the audit")
+        rescanned = {i["id"]: i for i in data["issues"] if i["category"] in ("leak", "internal-ref")}
+        check(data["leak_scan"]["history"] == history_commit and set(rescanned) == scanned,
+              "a later scan reads HEAD only, and keeps the IDs the history scan gave")
+        moved = rescanned[leak["id"]]
+        check(moved["evidence"]["at_head"] and (moved["file"], moved["line"]) == ("pkg/config.py", 3),
+              "a secret moved to another file, lower down, keeps its ID when HEAD is scanned")
+        token = next(i for i in rescanned.values() if i["rule"] == "huggingface-access-token")
+        check(token["status"] == "open" and token["severity"] == "critical" and not token["evidence"]["at_head"],
+              "a secret only in the history stays open and critical when HEAD is scanned")
+        mila = next(i for i in rescanned.values() if i["rule"] == "internal-mila-path")
+        slurm = next(i for i in rescanned.values() if i["rule"] == "internal-slurm-account")
+        check(mila["status"] == "open" and mila["severity"] == "low" and slurm["severity"] == "high",
+              "an internal path taken out of HEAD drops to history-only (low), not fixed; one still there stays high")
         p = cli("compare", r, "baseline")
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
         p = cli("report", r)
@@ -408,6 +428,9 @@ def end_to_end():
         p = subprocess.run([sys.executable, str(repo / ".revibe/scripts/cleanup.py"), "compare", r, "baseline"],
                            capture_output=True, text=True)
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .revibe/scripts/ runs on its own")
+        cli("leaks", r, "--history")
+        check(json.loads((repo / ".revibe/issues.json").read_text())["leak_scan"]["history"] != history_commit,
+              "leaks --history reads the full history again")
         check(not any(f.name == "__pycache__" for f in (repo / ".revibe").rglob("*")) and
               not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .revibe/ or the skill folder")
         files = [f.read_text(errors="replace") for f in (repo / ".revibe").rglob("*") if f.is_file()]
