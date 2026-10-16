@@ -47,6 +47,7 @@ def offline():
     print("offline")
     check(scope.matches("tests/test_a.py", "tests/**") and not scope.matches("pkg/tests/a.py", "tests/**"),
           "'tests/**' matches only the top-level tests/")
+    check(scope.matches("src/tests/fake_db.py", "**/tests/**"), "'**/tests/**' matches a nested tests/ folder")
     check(scope.matches("a/b/test_x.py", "**/test_*.py") and scope.matches("test_x.py", "**/test_*.py"),
           "'**/' matches any depth, including none")
     created = {tool.name: tool for tool in tools.ALL}
@@ -131,8 +132,11 @@ def offline():
         none = created["deptry"].measure(scope.Scope(Path(tmp), []))
         Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
         inline = created["deptry"].measure(scope.Scope(Path(tmp), ["tool.py"]))
-        check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
-              "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
+        Path(tmp, "setup.py").write_text("from setuptools import setup\n")
+        unreadable = created["deptry"].measure(scope.Scope(Path(tmp), ["tool.py"]))
+        check(none.skipped and none.issues[0]["severity"] == inline.issues[0]["severity"] == "high"
+              and unreadable.issues[0]["severity"] == "low",
+              "no list where pip or uv look is high, even with PEP 723 blocks; only a setup.py deptry can't read is low")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
@@ -206,6 +210,8 @@ def build_repo(root: Path) -> dict:
     sbatch = "#SB" + "ATCH"
     account = "rrg" + "-someprof"
     mila = "/net" + "work/scratch/s/student/data"
+    cluster = "/wo" + "rk1/somelab/student/data"
+    drac = "def" + "-someprof"
 
     repo = root / "repo"
     repo.mkdir()
@@ -273,11 +279,21 @@ def normalize_b(rows):
         out.append(row)
     return out
 """)
-    write("pkg/vendored.py", "def borrowed(x):\n    return x\n")
-    write("pkg/main.py", "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.shared import dispatch\n"
+    write("pkg/vendored.py", 'def borrowed(x):\n    return x\n\n\nPATTERN = "a\\.b"\n')  # an invalid escape
+    write("pkg/main.py", "import pkg.constants\nimport pkg.trainer\n"
+          "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.shared import dispatch\n"
           "from pkg.vendored import borrowed\n\n\n"
-          "def main():\n    print(route('k1', 1), normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2))\n\n\n"
+          "def main():\n    if True:\n" + "        print(route('k1', 1))\n" * 6 +
+          "    print(normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2))\n\n\n"
           "if __name__ == '__main__':\n    main()\n")
+    write("pkg/legacy.py", "def old_route(x):\n" + "    x += 1\n" * 25 + "    return x\n")
+    write("pkg/tests/helpers.py", "def fixture_rows():\n" + "    rows = []\n" * 6 + "    return rows\n")
+    write("pkg/launch.py", f'import argparse\n\nparser = argparse.ArgumentParser()\n'
+          f'parser.add_argument("--account", default="{drac}")\n')
+    write("scripts/sync.sh", f"#!/bin/bash\n{sbatch} --account={{account}}\nrsync -a {cluster} .\n")
+    write("PLAN.md", "# plan\n")
+    write("Untitled.ipynb", "{}\n")
+    (repo / "loss_curve.png").write_bytes(b"\x89PNG")
     (root / "shared").mkdir()  # a tracked symlink to a module outside the repo
     (root / "shared/dispatch.py").write_text(f"def dispatch(kind, x):\n{branches}\n    return x\n")
     (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
@@ -293,7 +309,6 @@ def normalize_b(rows):
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
     sh("commit", "-qm", "demo repo")
-    (repo / "scripts").mkdir()
     sh("mv", "train.sh", "scripts/train.sh")
     sh("mv", "data/blob.bin", "data/weights.bin")
     sh("commit", "-qm", "move files")
@@ -324,6 +339,7 @@ def end_to_end():
         check(p.returncode == 0, f"leaks runs ({p.stderr.strip()[-200:]})")
         p = cli("measure", r, "--label", "baseline")
         check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
+        check("SyntaxWarning" not in p.stderr, "the repo's invalid escapes print no warnings")
         data = json.loads((repo / ".revibe/issues.json").read_text())
         scanned = {i["id"] for i in data["issues"] if i["category"] in ("leak", "internal-ref")}
         history_commit = data["leak_scan"]["history"]
@@ -347,6 +363,14 @@ def end_to_end():
         check(one("internal-ref", "internal-slurm-account", severity="high", file="scripts/train.sh"),
               "SLURM account, in a file moved since -> high, at its path at HEAD")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
+        check(one("internal-ref", "internal-slurm-account", file="pkg/launch.py", severity="high"),
+              "a DRAC account in an argparse default -> high")
+        check(not one("internal-ref", "internal-slurm-account", file="scripts/sync.sh"),
+              "an `--account={account}` template is not an account")
+        check(one("internal-ref", "internal-cluster-path", file="scripts/sync.sh", severity="high"),
+              "a /work1/<lab>/<user> path -> high")
+        check(len(by.get(("internal-ref", "internal-cluster-path"), [])) == 1,
+              "a Mila /network/scratch path is not also a cluster path")
         check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
               "6 MB file at HEAD -> high, at its path there")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
@@ -355,6 +379,15 @@ def end_to_end():
               "class named only in yaml `target:` -> dismissed")
         check(one("dead-code", "function", symbol="train", status="open"),
               "dead `train()` stays open although a test calls `model.train()`")
+        check(one("dead-code", "unused-module", file="pkg/legacy.py", severity="high")
+              and not one("dead-code", "function", symbol="old_route"),
+              "a module nothing imports -> one high issue, not one per function in it")
+        check(not one("dead-code", "unused-module", file="pkg/main.py"), "a script with a __main__ guard is not dead")
+        check(not one("dead-code", "unreachable", file="pkg/main.py"), "the body of `if True:` is not dead code")
+        check(not any(i["file"].startswith("pkg/tests/") for i in data["issues"]), "nested tests/ folders are out of scope")
+        check(one("readiness", "clutter-output", severity="high") and one("readiness", "clutter-scratch", severity="high")
+              and one("readiness", "clutter-notes", severity="medium"),
+              "a root image, an Untitled notebook and a PLAN.md -> clutter issues")
         check(one("complexity", "cc", symbol="route", source="scb-check"), "CC > 10 -> complexity issue")
         check(one("complexity", "cc", symbol="dispatch", file="pkg/shared.py"),
               "a tracked symlink to a module outside the repo is measured")

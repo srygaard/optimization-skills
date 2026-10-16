@@ -90,8 +90,8 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 | severity | meaning | for example | phase |
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
-| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, red flags you add | Medium |
+| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, working notes at the root, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
@@ -120,7 +120,8 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
   candidates named with their module (`module.Name`, `module:name`, `from module import Name`) in configs,
   notebooks and tests, or in a string in the code (see `note`). Bare mentions (`model.train()`,
   `split="train"`) don't dismiss; they are listed in `evidence.mentioned_in` for you to check. Methods are not listed: framework hooks (`training_step`,
-  `forward`) make them unreliable.
+  `forward`) make them unreliable. A module whose name no other tracked file mentions, and that isn't a
+  script (no `__main__` guard, no work at the top level), is one candidate for the whole file.
 - **Possible secrets** (high, "Possible secret"): look at the location, never the value. Dismiss false
   positives with a `note`. The scan ignores `gitleaks:allow` comments and the repo's own ignore files, so
   a key someone waved past a hook still shows up.
@@ -144,7 +145,7 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 |---|---|---|
 | LOC, Verbosity, Erosion, Cognitive erosion, Violation %, Clone Ratio | `scb-check` 0.2.0 | Verbosity = share of lines that are duplicated or flagged by slop rules. Erosion = share of complexity mass (CC × √SLOC) in functions with CC > 10 |
 | Functions CC > 10 | scb-check | the work list behind Erosion: one issue per function, with its cognitive complexity as evidence. CC counts `and`/`or` and conditional expressions too |
-| Dead code LOC | vulture | unused functions and classes not named anywhere else |
+| Dead code LOC | vulture | unused functions, classes and modules not named anywhere else |
 | Red flags open, Leaks open | issues.json | counts of open issues |
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
 | Avg code lines per file, Files > 500 / > 1000 code lines | `tokenize`, `ast` | code lines per source file: comments, docstrings, imports and blank lines don't count, so documenting code never makes a file "too long". A file over 1000 gets a medium issue: split it into modules that each own one concept. A file that doesn't parse has no count (it is listed under not measured) |

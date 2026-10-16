@@ -26,14 +26,21 @@ regex = '''/((?:project|projects|scratch|nearline)/(?:def|rrg|ctb)-[\w./-]+)'''
 keywords = ["def-", "rrg-", "ctb-"]
 
 [[rules]]
-id = "internal-slurm-account"
-regex = '''#SBATCH\s+(?:-A|--account)[=\s]+(\S+)'''
-keywords = ["#sbatch"]
+id = "internal-slurm-account"  # an #SBATCH account (not a template like {account} or $ACCT), or a DRAC allocation name
+regex = '''#SBATCH\s+(?:-A|--account)[=\s]+([^\s{$<]\S*)|(?:^|[^\w/.-])((?:def|rrg|ctb|aip)-[a-z][\w-]*)'''
+keywords = ["#sbatch", "def-", "rrg-", "ctb-", "aip-"]
+
+[[rules]]
+id = "internal-cluster-path"  # HPC filesystems: /scratch/<user>/..., /work1/<group>/<user>, /lustre..., /gpfs...
+regex = '''(?:^|[^\w.-])/((?:scratch|work\d*|lustre\d*|gpfs)/[\w.-]+/[\w./-]+)'''
+keywords = ["/scratch/", "/work", "/lustre", "/gpfs"]
+filter = '''matchesAny(finding["secret"], [`/(?:my|your)[-_]`, `/(?:user|username|USER)(?:/|$)`])'''
 
 [[rules]]
 id = "internal-host-or-email"
 regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
 keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
+filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`])'''  # public documentation and websites
 
 [[rules]]
 id = "internal-wandb-entity"
@@ -42,6 +49,6 @@ keywords = ["entity"]
 
 [[rules]]
 id = "internal-home-path"
-regex = '''/((?:home|Users)/[a-z][\w.-]{1,31}/[\w./-]+)'''
+regex = '''/((?:home|Users)/[a-z][\w.-]{0,31}/[\w./-]+)'''
 keywords = ["/home/", "/users/"]
 filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name)/`])'''
