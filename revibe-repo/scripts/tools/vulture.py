@@ -6,7 +6,7 @@ from pathlib import Path
 
 from utils.git import git
 from utils.pyproject import read_pyproject
-from tools.base import Result, Tool
+from tools.base import Metric, Result, Tool
 
 TOOL = Tool(
     name="vulture",
@@ -22,6 +22,7 @@ TOOL = Tool(
         "min_dead_lines": 5,  # smaller unused symbols still count in dead-code LOC but get no issue
         "dead_high_lines": 20,  # unused symbols at least this long are high: remove them before release
     },
+    metrics=(Metric("dead_code_loc", "Dead code LOC"),),
 )
 
 

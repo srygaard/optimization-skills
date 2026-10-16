@@ -1,6 +1,6 @@
 """Source file length, from the scope's index."""
 
-from tools.base import Result, Tool
+from tools.base import Metric, Result, Tool
 
 TOOL = Tool(
     name="file-length",
@@ -11,6 +11,11 @@ TOOL = Tool(
         "long_file_lines": 1000,  # source files longer than this should be split
         "warn_file_lines": 500,  # files longer than this are counted
     },
+    metrics=(
+        Metric("avg_file_lines", "Avg file length"),
+        Metric("files_over_500", "Files > {warn_file_lines} lines"),
+        Metric("files_over_1000", "Files > {long_file_lines} lines", warn="files over {long_file_lines} lines"),
+    ),
 )
 
 

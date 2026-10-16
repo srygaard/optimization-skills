@@ -2,9 +2,9 @@
 
 import re
 
-from tools.base import Result, Tool
+from tools.base import Metric, Result, Tool
 
-TOOL = Tool(name="suppressions", policy={})  # a scorecard count, without issues
+TOOL = Tool(name="suppressions", policy={}, metrics=(Metric("suppressions", "Suppressions", warn="suppressions"),))
 
 
 def measure(scope) -> Result:

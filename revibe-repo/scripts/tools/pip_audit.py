@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from utils.process import run
-from tools.base import Result, Tool, ToolError
+from tools.base import Metric, Result, Tool, ToolError
 
 TOOL = Tool(
     name="pip-audit",
@@ -17,6 +17,7 @@ TOOL = Tool(
         "vuln-unfixed": ("low", "known vulnerability without a fixed release"),
         "pins-none": ("low", "no lockfile or pinned requirements: can't audit, installs aren't reproducible"),
     },
+    metrics=(Metric("vulnerable_deps", "Vulnerable deps"),),
 )
 
 
