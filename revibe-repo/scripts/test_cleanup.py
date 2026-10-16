@@ -212,6 +212,7 @@ def build_repo(root: Path) -> dict:
     mila = "/net" + "work/scratch/s/student/data"
     cluster = "/wo" + "rk1/somelab/student/data"
     drac = "def" + "-someprof"
+    email = "selftest@" + "mila" + ".quebec"
 
     repo = root / "repo"
     repo.mkdir()
@@ -233,7 +234,8 @@ def build_repo(root: Path) -> dict:
     branches = "\n".join(f"    {'if' if n == 0 else 'elif'} kind == 'k{n}':\n        return x + {n}" for n in range(12))
     legacy = "\n".join(f"    {'if' if n == 0 else 'elif'} mode == 'm{n}':\n        y = [v * {n} for v in y]" for n in range(12))
     body = "\n".join(f"        row = row * {n + 2} + {n}" for n in range(10))
-    write("README.md", "# demo\n")
+    write("README.md", f"# demo\n\nContact: {email}\n")
+    write("pyproject.toml", f'[project]\nname = "demo"\nauthors = [{{name = "Demo", email = "{email}"}}]\n')
     write("requirements.txt", "requests==2.19.1\n")
     write("pkg/__init__.py", "")
     write("pkg/model.py", f"""import numpy as np
@@ -366,6 +368,9 @@ def end_to_end():
         check(one("internal-ref", "internal-slurm-account", severity="high", file="scripts/train.sh"),
               "SLURM account, in a file moved since -> high, at its path at HEAD")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
+        check(one("internal-ref", "internal-host-or-email", file="README.md")
+              and not one("internal-ref", "internal-host-or-email", file="pyproject.toml"),
+              "a lab email is an internal reference, except as an author in pyproject.toml")
         check(one("internal-ref", "internal-slurm-account", file="pkg/launch.py", severity="high"),
               "a DRAC account in an argparse default -> high")
         check(not one("internal-ref", "internal-slurm-account", file="scripts/sync.sh"),
