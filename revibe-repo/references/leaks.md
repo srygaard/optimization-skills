@@ -5,17 +5,20 @@ delete it. That is why the scan is mandatory and runs first.
 
 ## What `cleanup.py leaks` scans
 
-- **The full git history, once:** the first scan reads every commit on every ref (`betterleaks git`), so
-  a key deleted three years ago is still found.
-- **Then HEAD:** later scans read only the files at HEAD. An issue the history scan found keeps its ID,
-  status and history evidence: an internal reference matches by rule and file, a credential by the
+- **Every commit, once:** the first scan reads every commit on every ref (`betterleaks git`), so a key
+  deleted three years ago is still found. Later scans read only the commits added since (those not
+  reachable from the tips the last scan read), so a secret committed and removed between two scans is
+  still found.
+- **The files at HEAD, every time:** they say what is still at HEAD and what is only in the history.
+- **Issues carry over:** an issue found before keeps its ID, status and evidence. An internal reference
+  matches by rule and file, a credential by a commit it was found in: one at HEAD is traced to the
   commit that added its line (`git blame`), so moving the file or editing around it changes nothing. One
   that has left HEAD comes back "only in history" (an internal reference drops to low, a credential
   stays critical) and is never marked fixed, since the history still holds it. A credential on a line
-  rewritten since is reported again, as new. A secret committed and removed between two scans is never
-  seen: scan every commit.
-- **The full history again** when the rules change (a new `--internal` pattern, a new rules file or
-  Betterleaks version), or with `leaks --history`, e.g. after rewriting the history.
+  rewritten since is reported again, as new.
+- **Every commit again** when the rules change (a new `--internal` pattern, a new rules file or
+  Betterleaks version), when a commit read before has left the history (rewritten, amended, or on a
+  deleted branch), or with `leaks --history`. Issues no commit holds any more are then marked fixed.
 - **"At HEAD"** means Betterleaks finds it in HEAD's files, archives included, under its path there.
 - **Not scanned:** untracked files (the script warns; commit or ignore them and re-run), Git LFS content,
   submodules, and anything outside git (wandb runs, checkpoints on disk, Hugging Face model cards).
@@ -83,8 +86,7 @@ lives in a temp dir that is deleted at once.
      GitHub's caches keep the old objects. The agent never force-pushes.
 4. **Prevent recurrence:** a secret-scanning pre-commit hook (`betterleaks git --pre-commit --staged`),
    a CI job running the same scan, and GitHub push protection once the repo is public.
-5. **Re-scan** with the same rules: `cleanup.py leaks --history` after rewriting the history,
-   `cleanup.py leaks` when only HEAD changed.
+5. **Re-scan** with `cleanup.py leaks`: after a rewrite it reads every commit again by itself.
 
 ## Betterleaks binary
 

@@ -1,4 +1,4 @@
-"""Betterleaks over the git history, once, then over the files at HEAD: credentials and internal references.
+"""Betterleaks over each commit once and over the files at HEAD every time: credentials and internal references.
 It is not on PyPI, so a pinned release binary is downloaded once, checked against its SHA-256 and cached."""
 
 import datetime as dt
@@ -129,36 +129,39 @@ class Betterleaks(Tool):
             key=key, **at, fix=fix,
             done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled.")
 
-    def carry_over(self, found: list, known: list, history: bool) -> list:
+    def carry_over(self, found: list, known: list, full: bool) -> list:
         """`found` with the IDs of the issues `known` before: an internal reference matches by ID (its rule and
-        file), a credential by a fingerprint in common (a commit that added it). After a scan of HEAD only, each
-        also keeps what the history scan saw, and a known issue not found is still in the history: it comes back
-        as history-only rather than fixed."""
+        file), a credential by a fingerprint in common (a commit it was found in). After a scan of the new commits
+        only, each also keeps what earlier scans saw, and a known issue not found is still in the commits read
+        before: it comes back as history-only rather than fixed."""
         left = {k["id"]: k for k in known if k["status"] != "fixed"}
         out = []
         for i in found:
             k = take(left, i)
-            if k and history:
+            if k and full:
                 i = {**i, "id": k["id"]}
             elif k:
-                i = self.seen_at_head(k, i)
+                i = self.updated(k, i)
             out.append(i)
-        if not history:
-            out += [self.seen_at_head(k, None) for k in left.values()]
+        if not full:
+            out += [self.updated(k, None) for k in left.values()]
         return out
 
-    def seen_at_head(self, known: dict, now: dict | None) -> dict:
-        """`known` after a scan of HEAD only: `now` is what it found of it, or None once it has left HEAD (it is
-        still in the history). It keeps its ID and what the history scan saw; it becomes certain if HEAD is."""
-        ev = {**known["evidence"], "at_head": False, "head_files": []}
+    def updated(self, known: dict, now: dict | None) -> dict:
+        """`known` after a scan of the new commits and HEAD: `now` is what it found of it, or None (it is only in
+        the commits read before). It keeps its ID, what each scan found of it adds up, and it becomes certain if a
+        finding is."""
+        old = known["evidence"]
+        ev = {**old, "at_head": False, "head_files": []}
         at = {"file": known["file"], "line": known["line"], "evidence": ev}
         rule = known["rule"]
         if now:
             seen = now["evidence"]
-            ev.update({k: seen[k] for k in ("at_head", "head_files", "preview", "matches", "match_count") if k in seen})
-            ev["rules"] = sorted({*ev["rules"], *seen["rules"]})
-            at.update(file=now["file"], line=now["line"])
-            if seen.get("certain") and not ev.get("certain"):
+            ev.update(added_up(known, seen), rules=sorted({*old["rules"], *seen["rules"]}))
+            if seen["at_head"]:
+                ev.update({k: seen[k] for k in ("at_head", "head_files", "preview", "matches", "match_count") if k in seen})
+                at.update(file=now["file"], line=now["line"])
+            if seen.get("certain") and not old.get("certain"):
                 ev["certain"] = True
                 rule = now["rule"]
         build = self.internal_issue if known["category"] == "internal-ref" else self.credential_issue
@@ -167,15 +170,15 @@ class Betterleaks(Tool):
         return issue
 
     def scan(self, repo: Path, internal: list, last: dict, known: list) -> Result:
-        """Betterleaks over the files at HEAD, and over the full history the first time, or when the rules or the
-        binary changed since `last` (the previous scan's record; {} to force it, after rewriting the history).
-        Otherwise `known`, this tool's issues, says what is in the history. Its metrics record the version and the
-        rules it ran, and whether it read the history."""
+        """Betterleaks over the files at HEAD and over the commits it never read: all of them the first time, and
+        again when the rules or the binary changed since `last` (the previous scan's record; {} forces it) or a
+        commit it read has left the history (rewritten, or on a deleted branch). `known`, this tool's issues, holds
+        what the commits read before had. Its metrics record the version and rules it ran, the tips of the history
+        it has read, whether it read all of it, and how many commits it read."""
         exe = self.executable()
         version = run([exe, "version"]).stdout.strip() or "?"
         rules = rule_set(internal)
         rules_sha256 = hashlib.sha256(rules.encode()).hexdigest()[:12]
-        history = not last.get("history") or (last.get("rules_sha256"), last.get(self.name)) != (rules_sha256, version)
         with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
             config = Path(tmp, "rules.toml")
             config.write_text(rules)
@@ -183,16 +186,21 @@ class Betterleaks(Tool):
             # (--shared copies no objects)
             mirror = Path(tmp, "scan.git")
             git(repo, "clone", "--quiet", "--mirror", "--shared", str(repo), str(mirror))
+            same_rules = (last.get("rules_sha256"), last.get(self.name)) == (rules_sha256, version)
+            full = not (same_rules and still_in_history(mirror, last.get("tips")))
+            unread = ["--all"] if full else ["--all", "--not", *last["tips"]]
+            commits = int(git(mirror, "rev-list", "--count", *unread))
             at_head = betterleaks(exe, mirror, config, ["--log-opts", head_as_commit(repo, mirror)])
-            committed = betterleaks(exe, mirror, config, []) if history else []
-        for f in at_head:  # found in the stand-in commit: say HEAD
+            committed = betterleaks(exe, mirror, config, ["--log-opts", " ".join(unread)]) if commits else []
+            tips = git(mirror, "rev-list", "--no-walk", "--all").split()
+        for f in at_head:  # found in the stand-in commit: say HEAD, until traced
             f["head"] = (f["File"], f["StartLine"])
-            f.update(Commit="HEAD", Date="", Fingerprint=f"HEAD:{f['File']}:{f['RuleID']}:{f['StartLine']}")
-        if not history:
-            trace(repo, at_head)
+            f.update(Commit="HEAD", Date="")
+        trace(repo, at_head)
         groups = group_findings(committed, at_head)
-        issues = self.carry_over([self.group_issue(g) for g in groups.values()], known, history)
-        return Result(issues, {self.name: version, "rules_sha256": rules_sha256, "history": history})
+        issues = self.carry_over([self.group_issue(g) for g in groups.values()], known, full)
+        return Result(issues, {self.name: version, "rules_sha256": rules_sha256, "tips": tips, "full": full,
+                               "commits": commits})
 
 # --- the binary ------------------------------------------------------------------------------------
 
@@ -258,22 +266,42 @@ def head_as_commit(repo: Path, mirror: Path) -> str:
     return p.stdout.strip()
 
 
+def still_in_history(mirror: Path, tips: list | None) -> bool:
+    """Whether every commit read before, up to `tips`, is still in the history: none was rewritten away or left
+    on a deleted branch."""
+    if not tips:
+        return False
+    p = run(["git", "-C", mirror, "rev-list", "-n1", *tips, "--not", "--all"])
+    return p.returncode == 0 and not p.stdout.strip()
+
+
 def trace(repo: Path, at_head: list):
-    """Point each credential found at HEAD at the commit that added its line, as a scan of the history reports it,
-    so the fingerprints of the two scans match. A file name, a file in an archive, or a line blame can't trace
-    stays at HEAD."""
+    """Point each credential found at HEAD at where a scan of the history finds it (`origin`), so the
+    fingerprints of the two scans match. One without an origin stays at HEAD."""
     for f in at_head:
-        if f["RuleID"].startswith("internal-") or not f["StartLine"] or "!" in f["File"]:
-            continue
-        p = run(["git", "-C", repo, "blame", "--porcelain", "-L", f"{f['StartLine']},+1", "HEAD", "--", f["File"]])
-        if p.returncode:
-            continue
-        header, *rest = p.stdout.splitlines()  # the last line is the line itself: never shown
-        commit, line = header.split()[:2]
-        meta = dict(r.split(" ", 1) for r in rest if " " in r and not r.startswith("\t"))
-        when = dt.datetime.fromtimestamp(int(meta["author-time"]), dt.timezone.utc)
-        f.update(Commit=commit, Date=when.strftime("%Y-%m-%dT%H:%M:%SZ"), File=meta["filename"], StartLine=int(line),
-                 Fingerprint=f"{commit}:{meta['filename']}:{f['RuleID']}:{line}")
+        found = None if f["RuleID"].startswith("internal-") or not f["StartLine"] else origin(repo, f)
+        if found:
+            commit, time, file, line = found
+            when = dt.datetime.fromtimestamp(int(time), dt.timezone.utc)
+            f.update(Commit=commit, Date=when.strftime("%Y-%m-%dT%H:%M:%SZ"), File=file, StartLine=line,
+                     Fingerprint=f"{commit}:{file}:{f['RuleID']}:{line}")
+
+
+def origin(repo: Path, f: dict) -> tuple | None:
+    """(commit, author time, path, line) where a scan of the history finds `f`, a finding at HEAD: the commit that
+    added its line, or for a file in an archive the last commit that changed the archive, since a scan reads all
+    of an archive each time it changes. None for a line blame can't trace."""
+    archive, inside, _ = f["File"].partition("!")
+    if inside:
+        last = git(repo, "log", "-1", "--format=%H %at", "HEAD", "--", archive).split()
+        return (*last, f["File"], f["StartLine"]) if last else None
+    p = run(["git", "-C", repo, "blame", "--porcelain", "-L", f"{f['StartLine']},+1", "HEAD", "--", f["File"]])
+    if p.returncode:
+        return None
+    header, *rest = p.stdout.splitlines()  # the last line is the line itself: never shown
+    commit, line = header.split()[:2]
+    meta = dict(r.split(" ", 1) for r in rest if " " in r and not r.startswith("\t"))
+    return commit, meta["author-time"], meta["filename"], int(line)
 
 
 # --- findings to issues ----------------------------------------------------------------------------
@@ -290,9 +318,8 @@ def preview(secret: str) -> str:
 def group_findings(committed: list, at_head: list) -> dict:
     """{basis: group} of Betterleaks findings, grouped the way they get fixed: a credential wherever it appears
     (it is rotated once), an internal reference per rule and file. `committed` were found in the history, each
-    in the commit that added it; `at_head` in HEAD's files, each with `head`, where it is there. With no history
-    read, HEAD's findings say where they were committed. Groups hold the plaintext (`matches`); issues get only
-    `preview`."""
+    in the commit that added it; `at_head` in HEAD's files, each with `head`, where it is there, and traced to a
+    commit if it can be. Groups hold the plaintext (`matches`); issues get only `preview`."""
     groups = {}
     for f in committed:
         place(group(groups, f), f)
@@ -302,8 +329,10 @@ def group_findings(committed: list, at_head: list) -> dict:
         g["at_head"] = min(g["at_head"] or f["head"], f["head"])
         if g["internal"]:
             g["head_matches"].add(f["Secret"][:80])
-        if not committed or not g["locs"]:  # the history scan doesn't say where it was committed
+        if f["Commit"] != "HEAD" and f["Fingerprint"] not in g["fingerprints"]:  # traced to a commit read before
             place(g, f)
+    for g in groups.values():
+        g["first"] = g["first"] or ("", "HEAD", *g["at_head"])  # in no commit read now
     return groups
 
 
@@ -343,6 +372,21 @@ def take(left: dict, found: dict) -> dict | None:
     return k
 
 
+def added_up(known: dict, seen: dict) -> dict:
+    """The history evidence of `known` together with `seen`, what a scan of the commits added since found of it.
+    A finding at HEAD traced to a commit read before is not counted twice."""
+    old = known["evidence"]
+    before = set(old["fingerprints"])
+    fresh = [fp for fp in seen["fingerprints"] if fp not in before]
+    first = old if old["first_date"] else seen
+    return {
+        "first_commit": first["first_commit"], "first_date": first["first_date"],
+        "occurrences": old["occurrences"] + seen["occurrences"] - (len(seen["fingerprints"]) - len(fresh)),
+        "locations": [*old["locations"], *(x for x in seen["locations"] if x not in old["locations"])][:10],
+        "fingerprints": [*old["fingerprints"], *fresh][:10 if known["category"] == "internal-ref" else None],
+    }
+
+
 def rank(confidence: str) -> int:
     """How a rule's confidence sorts, most confident first."""
     return {"high": 0, "medium": 1, "low": 2}.get(confidence, 9)
@@ -351,7 +395,7 @@ def rank(confidence: str) -> int:
 def located(g: dict) -> tuple:
     """(rule, issue arguments) shared by both kinds of group: the most confident and specific rule, where the
     group is now (at HEAD, or where it was first committed), and the evidence. A credential keeps all its
-    fingerprints, which a later scan of HEAD matches it by."""
+    fingerprints, which a later scan matches it by."""
     rule = min(g["rules"], key=lambda r: (rank(g["rules"][r]), "generic" in r, r))
     date, commit, file, line = g["first"]
     file, line = g["at_head"] or (file, line)
