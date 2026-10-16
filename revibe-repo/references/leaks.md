@@ -38,7 +38,7 @@ To change the file itself:
 
 ## Severity
 
-Severities come from the `TOOL` policy in `tools/betterleaks.py`, and every report.md ends with the
+Severities are set where `tools/__init__.py` creates `Betterleaks`, and every report.md ends with the
 list. A rule's confidence separates a certain credential (critical, wherever it is) from a possible one
 (high, to review); internal references matter most while they are at HEAD.
 
@@ -86,7 +86,7 @@ caches it in `~/.cache/revibe-repo/` (or `$XDG_CACHE_HOME`).
 - **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
   `BETTERLEAKS=/path/to/betterleaks`.
 - **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
-  verify the signature, then update the `version` and the four `sha256` values in the `TOOL` of
+  verify the signature, then update the `version` and the four `sha256` values of the `Betterleaks` class in
   `tools/betterleaks.py`:
 
   ```bash

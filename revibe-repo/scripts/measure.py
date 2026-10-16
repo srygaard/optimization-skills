@@ -6,7 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from report import print_scorecard
 from scope import Scope, shipped_files
 from state import Cleanup, merge, now
-from tools import ANALYZERS, MEASURE, vulture
+from tools import ANALYZERS, MEASURE
 from tools.base import ToolError
 from utils.git import git, head
 
@@ -15,18 +15,18 @@ from utils.git import git, head
 
 
 def tool_versions() -> dict:
-    """{tool: version} of the analyzers. Stops unless each is installed at the version its TOOL pins, as it
+    """{tool: version} of the analyzers. Stops unless each is installed at the version its class pins, as it
     is when the script runs through uv: numbers from other versions don't compare."""
     for m in ANALYZERS:
         try:
-            installed = version(m.TOOL.package)
+            installed = version(m.package)
         except PackageNotFoundError:
             installed = ""
-        if installed != m.TOOL.version:
+        if installed != m.version:
             found = f"{installed} is installed" if installed else "it is not installed"
-            raise SystemExit(f"{m.TOOL.package} {m.TOOL.version} is pinned but {found}: run `uv run --script cleanup.py ...`, "
+            raise SystemExit(f"{m.package} {m.version} is pinned but {found}: run `uv run --script cleanup.py ...`, "
                              "which installs the versions its header pins")
-    return {m.TOOL.name: m.TOOL.version for m in ANALYZERS}
+    return {m.name: m.version for m in ANALYZERS}
 
 
 def run_steps(scope, steps=MEASURE) -> tuple:
@@ -40,15 +40,17 @@ def run_steps(scope, steps=MEASURE) -> tuple:
         try:
             r = step.measure(scope)
         except Exception as e:
-            not_measured[step.TOOL.name] = str(e) if isinstance(e, ToolError) else f"error: {e!r}"
+            not_measured[step.name] = str(e) if isinstance(e, ToolError) else f"error: {e!r}"
             continue
         found += r.issues
         metrics.update(r.metrics)
         not_measured.update(r.notes or {})
         if r.skipped:
-            not_measured[step.TOOL.name] = r.skipped
+            not_measured[step.name] = r.skipped
         else:
-            measured.add(step.TOOL.name)
+            measured.add(step.name)
+    for step in steps:
+        step.adjust(found)
     return found, metrics, not_measured, measured
 
 
@@ -71,7 +73,6 @@ def cmd_measure(a):
     snap["not_measured"].update(not_measured)
     if scope.syntax_errors:
         snap["not_measured"]["parse"] = f"{len(scope.syntax_errors)} files don't parse: {scope.syntax_errors[:3]}"
-    vulture.mark_inside_dead_code(found)
     merge(data, found, measured)
     retired = {  # sources no longer run: their open issues are dismissed
         "ruff": "scb-check reports complexity now",

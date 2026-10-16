@@ -6,25 +6,75 @@ from pathlib import Path
 
 from utils.git import git
 from utils.pyproject import read_pyproject
-from tools.base import Metric, Result, Tool
+from tools.base import Metric, Result, Step
 
-TOOL = Tool(
-    name="vulture",
-    package="vulture",
-    version="2.16",
-    policy={
-        "dead-large": ("high", "unused function or class of {dead_high_lines}+ lines"),
-        "dead-small": ("low", "unused function or class of {min_dead_lines}+ lines, under {dead_high_lines}"),
-        # set by mark_inside_dead_code on other tools' issues
-        "inside-dead-code": ("low", "complexity or a red flag inside a dead-code candidate: delete that instead"),
-    },
-    settings={
-        "min_confidence": 60,  # vulture's confidence below which a candidate isn't reported
-        "min_dead_lines": 5,  # smaller unused symbols still count in dead-code LOC but get no issue
-        "dead_high_lines": 20,  # unused symbols at least this long are high: remove them before release
-    },
-    metrics=(Metric("dead_code_loc", "Dead code LOC"),),
-)
+
+class Vulture(Step):
+    """Unused functions and classes, checked against every file that could name them."""
+
+    name = "vulture"
+    package = "vulture"
+    version = "2.16"
+    policy = {
+        "dead-large": "unused function or class of {dead_high_lines}+ lines",
+        "dead-small": "unused function or class of {min_dead_lines}+ lines, under {dead_high_lines}",
+        # set by `adjust` on other tools' issues
+        "inside-dead-code": "complexity or a red flag inside a dead-code candidate: delete that instead",
+    }
+    metrics = (Metric("dead_code_loc", "Dead code LOC"),)
+
+    def dead_issue(self, c: dict, with_coverage: bool) -> dict:
+        """Open, or dismissed when something names the symbol or its body ran."""
+        item = c["item"]
+        size = c["lines"]
+        note = (f"referenced by name in {', '.join(c['hits'][:3])}" if c["hits"] else
+                "executed in the coverage run" if c["ran"] else "")
+        return self.issue(
+            "DEAD", "dead-code", c["rule"], "dead-large" if size >= self.settings["dead_high_lines"] else "dead-small",
+            f"{item.message} ({size} lines, vulture {item.confidence}% confidence)",
+            file=c["file"], symbol=c["symbol"], line=c["line"], end_line=c["line"] + size - 1,
+            evidence={"lines": size, "confidence": item.confidence, "referenced_in": c["hits"][:5],
+                      "mentioned_in": c["mentions"][:5], "executed": c["ran"] if with_coverage else None},
+            status="dismissed" if note else "open", note=note, effort="S",
+            fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
+                 "notebooks, shell scripts; files that mention its bare name are in `evidence.mentioned_in`), "
+                 "then delete it."),
+            done_when="Deleted, and the import test and safety net pass.")
+
+    def measure(self, scope) -> Result:
+        import vulture  # the analyzer, not this module: tools/ is not on sys.path
+
+        if not scope.files:
+            return Result([], {"dead_code_loc": 0})
+        config = read_pyproject(scope.repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
+        v = vulture.Vulture(ignore_names=config.get("ignore_names", []), ignore_decorators=config.get("ignore_decorators", []))
+        v.scavenge([scope.repo / f for f in scope.files], exclude=config.get("exclude", []))
+        # vulture resolves paths, and a tracked symlink can resolve outside the repo
+        names = {(scope.repo / f).resolve(): f for f in scope.files}
+        refs = _references(scope.repo, scope.files)
+        coverage = executed_lines(scope.repo)
+        found = []
+        for item in v.get_unused_code(min_confidence=self.settings["min_confidence"], sort_by_size=True):
+            file = names.get(Path(item.filename))  # None: one of vulture's bundled whitelists
+            # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
+            # training_step, nn.Module overrides) that vulture can't see being called
+            if file and item.typ not in ("method", "property", "variable", "attribute", "import"):
+                found.append(dead_candidate(item, file, scope, refs, coverage))
+        total = sum(c["lines"] for c in found if c["unused"])
+        return Result([self.dead_issue(c, bool(coverage)) for c in found if c["lines"] >= self.settings["min_dead_lines"]],
+                      {"dead_code_loc": total})
+
+    def adjust(self, found: list):
+        """Complexity and red-flag issues inside a dead-code candidate drop to low: delete before refactoring."""
+        dead = [i for i in found if i["category"] == "dead-code" and i["status"] == "open"]
+        for i in found:
+            if i["category"] not in ("complexity", "red-flag") or not i.get("line"):
+                continue
+            host = next((d for d in dead if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]), None)
+            if host:
+                i["severity"] = self.severity["inside-dead-code"]
+                i["evidence"]["inside_dead_code"] = host["id"]
+                i["fix"] = f"Inside dead-code candidate {host['id']}: delete that instead, unless it turns out to be used. " + i["fix"]
 
 
 def _references(repo: Path, shipped: list) -> list:
@@ -110,59 +160,3 @@ def dead_candidate(item, file: str, scope, refs: list, coverage: dict) -> dict:
     return {"item": item, "rule": "unreachable" if unreachable else item.typ, "file": file, "line": line,
             "lines": item.size, "symbol": qual, "hits": hits, "mentions": mentions, "ran": ran,
             "unused": not hits and not ran}
-
-
-def dead_issue(c: dict, with_coverage: bool) -> dict:
-    """Open, or dismissed when something names the symbol or its body ran."""
-    item = c["item"]
-    size = c["lines"]
-    note = (f"referenced by name in {', '.join(c['hits'][:3])}" if c["hits"] else
-            "executed in the coverage run" if c["ran"] else "")
-    return TOOL.issue(
-        "DEAD", "dead-code", c["rule"], "dead-large" if size >= TOOL.settings["dead_high_lines"] else "dead-small",
-        f"{item.message} ({size} lines, vulture {item.confidence}% confidence)",
-        file=c["file"], symbol=c["symbol"], line=c["line"], end_line=c["line"] + size - 1,
-        evidence={"lines": size, "confidence": item.confidence, "referenced_in": c["hits"][:5],
-                  "mentioned_in": c["mentions"][:5], "executed": c["ran"] if with_coverage else None},
-        status="dismissed" if note else "open", note=note, effort="S",
-        fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
-             "notebooks, shell scripts; files that mention its bare name are in `evidence.mentioned_in`), "
-             "then delete it."),
-        done_when="Deleted, and the import test and safety net pass.")
-
-
-def measure(scope) -> Result:
-    from vulture import Vulture
-
-    if not scope.files:
-        return Result([], {"dead_code_loc": 0})
-    config = read_pyproject(scope.repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
-    v = Vulture(ignore_names=config.get("ignore_names", []), ignore_decorators=config.get("ignore_decorators", []))
-    v.scavenge([scope.repo / f for f in scope.files], exclude=config.get("exclude", []))
-    # vulture resolves paths, and a tracked symlink can resolve outside the repo
-    names = {(scope.repo / f).resolve(): f for f in scope.files}
-    refs = _references(scope.repo, scope.files)
-    coverage = executed_lines(scope.repo)
-    found = []
-    for item in v.get_unused_code(min_confidence=TOOL.settings["min_confidence"], sort_by_size=True):
-        file = names.get(Path(item.filename))  # None: one of vulture's bundled whitelists
-        # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
-        # training_step, nn.Module overrides) that vulture can't see being called
-        if file and item.typ not in ("method", "property", "variable", "attribute", "import"):
-            found.append(dead_candidate(item, file, scope, refs, coverage))
-    total = sum(c["lines"] for c in found if c["unused"])
-    return Result([dead_issue(c, bool(coverage)) for c in found if c["lines"] >= TOOL.settings["min_dead_lines"]],
-                  {"dead_code_loc": total})
-
-
-def mark_inside_dead_code(found: list):
-    """Complexity and red-flag issues inside a dead-code candidate drop to low: delete before refactoring."""
-    dead = [i for i in found if i["category"] == "dead-code" and i["status"] == "open"]
-    for i in found:
-        if i["category"] not in ("complexity", "red-flag") or not i.get("line"):
-            continue
-        host = next((d for d in dead if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]), None)
-        if host:
-            i["severity"] = TOOL.policy["inside-dead-code"][0]
-            i["evidence"]["inside_dead_code"] = host["id"]
-            i["fix"] = f"Inside dead-code candidate {host['id']}: delete that instead, unless it turns out to be used. " + i["fix"]

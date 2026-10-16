@@ -22,15 +22,14 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
 import measure
 import scope
 import state
 import tools
-from tools import betterleaks, deptry, scb_check, vulture
-from tools.base import Result, Step, Tool
+from tools import vulture
+from tools.base import Result, Step
 
 CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
 failures = []
@@ -50,19 +49,26 @@ def offline():
           "'tests/**' matches only the top-level tests/")
     check(scope.matches("a/b/test_x.py", "**/test_*.py") and scope.matches("test_x.py", "**/test_*.py"),
           "'**/' matches any depth, including none")
-    check(not betterleaks.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
+    created = {tool.name: tool for tool in tools.ALL}
+    check(not created["betterleaks"].tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
     rows = tools.policies()
     check(all(sev in state.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
-    check(len(rows) == sum(len(m.TOOL.policy) for m in tools.ALL), "no policy key is set by two tools")
-    check(all(isinstance(m, Step) for m in tools.MEASURE), "every measure step has a TOOL and a measure function")
+    check(len(rows) == sum(len(t.policy) for t in tools.ALL), "no policy key is set by two tools")
+    check(all(isinstance(t, Step) for t in tools.MEASURE), "every measure step is a Step")
     pinned = set(re.findall(r'"([\w.-]+==[\w.]+)"', CLEANUP.read_text().split("# ///")[1]))
-    check(pinned == {f"{m.TOOL.package}=={m.TOOL.version}" for m in tools.ANALYZERS},
-          "cleanup.py's header pins exactly the analyzers, at the versions their TOOL names")
+    check(pinned == {f"{t.package}=={t.version}" for t in tools.ANALYZERS},
+          "cleanup.py's header pins exactly the analyzers, at the versions their classes name")
+    try:
+        vulture.Vulture(severity={"dead-large": "high"})
+        refused = False
+    except ValueError:
+        refused = True
+    check(refused, "a tool created with severities that don't match its policy is refused")
 
     def cx(symbol, policy="complex", **kw):
-        return scb_check.TOOL.issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
-                                    symbol=symbol, **kw)
+        return created["scb-check"].issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
+                                          symbol=symbol, **kw)
 
     data = {"issues": []}
     state.merge(data, [cx("f"), cx("g")], {"scb-check"})
@@ -84,16 +90,24 @@ def offline():
     check(get["g"]["status"] == "open" and "refactored" in get["g"]["note"],
           "an issue an agent marked fixed reopens while the tool still detects it, keeping the agent's note")
 
-    step_a = Tool("a", {"x": ("low", "a test row")})
+    class Ok(Step):
+        name = "a"
+        policy = {"x": "a test row"}
 
-    def ok(scope):
-        return Result([step_a.issue("T", "bug", "x", "x", "found by a")], {"m": 1})
+        def measure(self, scope):
+            return Result([self.issue("T", "bug", "x", "x", "found by a")], {"m": 1})
 
-    def nothing_to_read(scope):
-        return Result([], {}, skipped="no lockfile")
+    class NothingToRead(Step):
+        name = "b"
 
-    def broken(scope):
-        raise KeyError("total_loc")
+        def measure(self, scope):
+            return Result([], {}, skipped="no lockfile")
+
+    class Broken(Step):
+        name = "c"
+
+        def measure(self, scope):
+            raise KeyError("total_loc")
 
     trainer = ["trainer", "pkg"]  # pkg/trainer.py: the module, then its packages
     cases = [  # (file, text, strings_only), name, modules, named?, mentioned?
@@ -114,9 +128,9 @@ def offline():
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
 
     with tempfile.TemporaryDirectory() as tmp:
-        none = deptry.measure(scope.Scope(Path(tmp), []))
+        none = created["deptry"].measure(scope.Scope(Path(tmp), []))
         Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
-        inline = deptry.measure(scope.Scope(Path(tmp), ["tool.py"]))
+        inline = created["deptry"].measure(scope.Scope(Path(tmp), ["tool.py"]))
         check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
               "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
 
@@ -152,9 +166,7 @@ def offline():
         check(isinstance(error, str) and "not valid JSON (line 1" in error, "broken JSON stops the command with its line")
 
     found, metrics, not_measured, measured = measure.run_steps(None, steps=(
-        SimpleNamespace(TOOL=step_a, measure=ok),
-        SimpleNamespace(TOOL=Tool("b", {}), measure=nothing_to_read),
-        SimpleNamespace(TOOL=Tool("c", {}), measure=broken)))
+        Ok({"x": "low"}), NothingToRead(), Broken()))
     check(measured == {"a"} and set(not_measured) == {"b", "c"} and metrics == {"m": 1},
           "a skipped or broken step is not measured, and the other steps still count")
     check(found[0]["source"] == "a", "issues carry the name of the step that found them")

@@ -13,7 +13,7 @@ from utils.git import head, repo_root
 
 class Severity(IntEnum):
     """How bad an issue is: a higher value is more severe. Members are named as issues.json spells them, most
-    severe first. Each tool's `TOOL` policy sets the severity of its issues."""
+    severe first. tools/__init__.py sets the severity of each kind of finding a tool reports."""
 
     critical = 4
     high = 3
