@@ -82,24 +82,47 @@ def _fully_pinned(path: Path) -> bool:
     return bool(reqs) and all(PINNED.match(ln) for ln in reqs)
 
 
+def audit_source(repo: Path, tmp: Path) -> tuple:
+    """pip-audit's arguments for the first pinned source, and its name: uv.lock, pylock.toml, fully pinned
+    requirements, .venv. (None, "") when there is none: resolving unpinned requirements can take as long as
+    installing them."""
+    if (repo / "uv.lock").exists() and (uv := shutil.which("uv")):
+        req = tmp / "requirements.txt"
+        p = run([uv, "export", "--project", repo, "--frozen", "--format", "requirements.txt",
+                 "--no-emit-project", "--quiet", "-o", req])
+        if p.returncode == 0:
+            return ["-r", req, "--require-hashes", "--disable-pip"], "uv.lock"
+    if list(repo.glob("pylock*.toml")):
+        return ["--locked", repo], "pylock.toml"
+    for req in [repo / "requirements.txt", *sorted(repo.glob("requirements*.txt"))]:
+        if req.exists() and _fully_pinned(req):
+            return ["-r", req, "--no-deps", "--disable-pip"], req.name
+    if sites := sorted(repo.glob(".venv/lib/python*/site-packages")):
+        return ["--path", sites[-1]], ".venv"
+    return None, ""
+
+
+def vuln_issue(dep: dict, label: str) -> dict:
+    """A vulnerable dependency, with the lowest release that fixes all of its known vulnerabilities."""
+    vulns = {v["id"]: v for v in dep["vulns"]}
+    fixed = [min(v["fix_versions"], key=version_key) for v in vulns.values() if v["fix_versions"]]
+    target = max(fixed, key=version_key) if fixed else None
+    ids = sorted(vulns)
+    return issue(
+        "VULN", "pip-audit", "vulnerable-dependency", "pip-audit", "vuln-fixable" if target else "vuln-unfixed",
+        f"{dep['name']} {dep['version']}: {len(ids)} known vulnerabilities ({', '.join(ids[:3])}"
+        f"{', ...' if len(ids) > 3 else ''})" + (f"; fixed in {target}" if target else "; no fix yet"),
+        key=f"VULN|{dep['name'].lower()}", file=label, symbol=dep["name"],
+        evidence={"version": dep["version"], "vulns": ids, "fix_to": target,
+                  "aliases": sorted({a for v in vulns.values() for a in v.get("aliases", [])})[:10]},
+        fix=(f"Bump {dep['name']} to >= {target} in the dependency spec, then run the safety net."
+             if target else "No fixed release yet: note it, or drop the dependency if it is easy."),
+        done_when=f"pip-audit reports no vulnerabilities for {dep['name']}.")
+
+
 def pip_audit_vulns(repo, files, index) -> Result:
     with tempfile.TemporaryDirectory(prefix="cleanup-audit-") as tmp:
-        source, label = None, ""
-        if (repo / "uv.lock").exists() and (uv := shutil.which("uv")):
-            req = Path(tmp) / "requirements.txt"
-            p = run([uv, "export", "--project", repo, "--frozen", "--format", "requirements.txt",
-                     "--no-emit-project", "--quiet", "-o", req])
-            if p.returncode == 0:
-                source, label = ["-r", req, "--require-hashes", "--disable-pip"], "uv.lock"
-        if source is None and list(repo.glob("pylock*.toml")):
-            source, label = ["--locked", repo], "pylock.toml"
-        if source is None:
-            for req in [repo / "requirements.txt", *sorted(repo.glob("requirements*.txt"))]:
-                if req.exists() and _fully_pinned(req):
-                    source, label = ["-r", req, "--no-deps", "--disable-pip"], req.name
-                    break
-        if source is None and (sites := sorted(repo.glob(".venv/lib/python*/site-packages"))):
-            source, label = ["--path", sites[-1]], ".venv"
+        source, label = audit_source(repo, Path(tmp))
         if source is None:
             return Result([issue(
                 "DEPS", "pip-audit", "readiness", "no-pinned-dependencies", "pins-none",
@@ -114,24 +137,7 @@ def pip_audit_vulns(repo, files, index) -> Result:
         if p.returncode not in (0, 1) or not report.exists():
             raise ToolError(p.stderr.strip()[-300:])
         deps = json.loads(report.read_text()).get("dependencies", [])
-    out = []
-    for dep in deps:
-        vulns = {v["id"]: v for v in dep.get("vulns", [])}
-        if not vulns:
-            continue
-        fixed = [min(v["fix_versions"], key=version_key) for v in vulns.values() if v["fix_versions"]]
-        target = max(fixed, key=version_key) if fixed else None
-        ids = sorted(vulns)
-        out.append(issue(
-            "VULN", "pip-audit", "vulnerable-dependency", "pip-audit", "vuln-fixable" if target else "vuln-unfixed",
-            f"{dep['name']} {dep['version']}: {len(ids)} known vulnerabilities ({', '.join(ids[:3])}"
-            f"{', ...' if len(ids) > 3 else ''})" + (f"; fixed in {target}" if target else "; no fix yet"),
-            key=f"VULN|{dep['name'].lower()}", file=label, symbol=dep["name"],
-            evidence={"version": dep["version"], "vulns": ids, "fix_to": target,
-                      "aliases": sorted({a for v in vulns.values() for a in v.get("aliases", [])})[:10]},
-            fix=(f"Bump {dep['name']} to >= {target} in the dependency spec, then run the safety net."
-                 if target else "No fixed release yet: note it, or drop the dependency if it is easy."),
-            done_when=f"pip-audit reports no vulnerabilities for {dep['name']}."))
+    out = [vuln_issue(dep, label) for dep in deps if dep.get("vulns")]
     return Result(out, {"pip_audit_source": label, "vulnerable_deps": len(out)})
 
 
