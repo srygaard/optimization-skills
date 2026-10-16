@@ -5,7 +5,7 @@ description: >-
   preparing a lab or research codebase for public release, auditing code quality, or planning and
   tracking a refactor with before/after numbers. Also for checking a repo for leaked secrets and API
   keys (W&B, Hugging Face, OpenAI, Anthropic, AWS, GitHub) anywhere in git history, internal
-  cluster paths, hostnames and SLURM accounts (Mila, DRAC), large checkpoints or data in history, a
+  cluster paths, hostnames and SLURM accounts (Mila, DRAC), large checkpoints or data in the repo, a
   missing LICENSE or README, undeclared or vulnerable dependencies
   (deptry, pip-audit), dead code (vulture), cyclomatic complexity, duplication, code sloppiness
   metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
@@ -78,7 +78,7 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
 | **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, big files in history, red flags you add | Medium |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules are the `policy` of each tool's `TOOL` in `scripts/tools/`, the one place its

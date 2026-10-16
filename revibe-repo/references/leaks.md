@@ -1,4 +1,4 @@
-# Leaks: secrets, internal references, large files
+# Leaks: secrets and internal references
 
 A credential that reaches a public repo is compromised: forks, clones and caches keep it after you
 delete it. That is why the scan is mandatory and runs first.
@@ -7,9 +7,8 @@ delete it. That is why the scan is mandatory and runs first.
 
 - **The full git history:** every commit on every ref (`betterleaks git`), so a key deleted three years
   ago is still found.
-- **Large blobs** (> 5 MB) anywhere in history: checkpoints, datasets, pickles, gifs.
-- **"At HEAD"** means the matched text (or the large blob) is somewhere in the HEAD tree, even if the
-  file was moved after the commit that added it.
+- **"At HEAD"** means the matched text is somewhere in the HEAD tree, even if the file was moved after
+  the commit that added it.
 - **Not scanned:** untracked files (the script warns; commit or ignore them and re-run), Git LFS content,
   submodules, and anything outside git (wandb runs, checkpoints on disk, Hugging Face model cards).
 
@@ -39,10 +38,12 @@ To change the file itself:
 
 ## Severity
 
-Severities come from the `TOOL` policy in `tools/betterleaks.py` and `tools/large_files.py`, and
-every report.md ends with the list. A rule's
-confidence separates a certain credential (critical, wherever it is) from a possible one (high, to
-review); internal references and large files matter most while they are at HEAD.
+Severities come from the `TOOL` policy in `tools/betterleaks.py`, and every report.md ends with the
+list. A rule's confidence separates a certain credential (critical, wherever it is) from a possible one
+(high, to review); internal references matter most while they are at HEAD.
+
+Large files are not part of this scan: `measure` checks the files at HEAD (over 5 MB is high). One
+removed from HEAD stays in the history until a fresh squashed history (or a rewrite) drops it.
 
 A credential is one issue wherever it appears, because it is rotated once. Internal references are one
 issue per rule and file. Only a known public prefix (`ghp_`, `hf_`, `sk-`) and the length of a secret are ever

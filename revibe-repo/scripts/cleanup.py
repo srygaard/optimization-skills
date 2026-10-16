@@ -5,7 +5,7 @@
 # ///
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 
-    cleanup.py leaks   REPO [--internal REGEX ...]    secrets, internal refs, large files (run first)
+    cleanup.py leaks   REPO [--internal REGEX ...]    secrets and internal refs in all history (run first)
     cleanup.py measure REPO [--label L] [--exclude G]  metrics snapshot + mechanical issues
     cleanup.py compare REPO BASE [--to LABEL]         before/after table and regression warnings
     cleanup.py report  REPO                           render REPO/.cleanup/report.md
@@ -31,7 +31,7 @@ from report import cmd_compare, cmd_report
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("leaks", help="scan the full git history for secrets, internal refs and large files")
+    p = sub.add_parser("leaks", help="scan the full git history for secrets and internal refs")
     p.add_argument("repo")
     p.add_argument("--internal", action="append", default=[], metavar="REGEX",
                    help="extra internal-reference pattern (RE2); repeatable")

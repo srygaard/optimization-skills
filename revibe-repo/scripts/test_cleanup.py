@@ -316,7 +316,7 @@ def end_to_end():
               "SLURM account, in a file moved since -> high, at its path at HEAD")
         check(one("internal-ref", "internal-mila-path", severity="high"), "Mila path -> high")
         check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
-              "6 MB file, moved since -> high, at its path at HEAD")
+              "6 MB file at HEAD -> high, at its path there")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
         check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
         check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
