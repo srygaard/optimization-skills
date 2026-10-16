@@ -245,15 +245,8 @@ def large_file_issues(repo: Path) -> list:
     return out
 
 
-def cmd_leaks(a):
-    repo = repo_root(a.repo)
-    d = state_dir(repo)
-    data = load_issues(d)
-    exe = betterleaks()
-    version = run([exe, "version"]).stdout.strip() or "?"
-    # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
-    internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
-    rules = RULES.read_text() + "".join(_internal_rule(n, rx) for n, rx in enumerate(internal, 1))
+def scan_history(repo: Path, exe: Path, rules: str) -> list:
+    """Betterleaks over every commit, as issues."""
     with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
         config, report, mirror = Path(tmp, "rules.toml"), Path(tmp, "report.json"), Path(tmp, "scan.git")
         config.write_text(rules)
@@ -266,8 +259,30 @@ def cmd_leaks(a):
                  "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
         if p.returncode or not report.exists():
             die(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
-        found = leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
-    found += large_file_issues(repo)
+        return leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
+
+
+def print_leaks(repo: Path, data: dict, found: list, version: str):
+    """Counts by severity, then the first 15 issues as issues.json now has them."""
+    counts = " · ".join(f"{n} {s}" for s in SEVERITIES if (n := sum(i["severity"] == s for i in found)))
+    print(f"leaks @ {head(repo)[:8]}  betterleaks {version}  {counts or 'nothing found'}")
+    ids = {i["id"] for i in found}
+    for i in [i for i in data["issues"] if i["id"] in ids][:15]:
+        print(f"  {i['id']}  {i['severity']:<8} {i['status']:<9} {i['summary'][:90]}")
+    if len(found) > 15:
+        print(f"  ... {len(found) - 15} more in .cleanup/issues.json")
+
+
+def cmd_leaks(a):
+    repo = repo_root(a.repo)
+    d = state_dir(repo)
+    data = load_issues(d)
+    exe = betterleaks()
+    version = run([exe, "version"]).stdout.strip() or "?"
+    # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
+    internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
+    rules = RULES.read_text() + "".join(_internal_rule(n, rx) for n, rx in enumerate(internal, 1))
+    found = scan_history(repo, exe, rules) + large_file_issues(repo)
     merge(data, found, {"betterleaks", "git-history"})
     data["tools"]["betterleaks"] = version
     data["leak_scan"] = {
@@ -275,16 +290,7 @@ def cmd_leaks(a):
         "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12],
     }
     save_issues(d, data, repo)
-
-    cur = [i for i in found if i["category"] in ("leak", "internal-ref", "large-file")]
-    counts = {s: sum(i["severity"] == s for i in cur) for s in SEVERITIES}
-    print(f"leaks @ {head(repo)[:8]}  betterleaks {version}  "
-          + " · ".join(f"{n} {s}" for s, n in counts.items() if n) if cur else
-          f"leaks @ {head(repo)[:8]}  betterleaks {version}  nothing found")
-    for i in [i for i in data["issues"] if i["id"] in {f["id"] for f in cur}][:15]:
-        print(f"  {i['id']}  {i['severity']:<8} {i['status']:<9} {i['summary'][:90]}")
-    if len(cur) > 15:
-        print(f"  ... {len(cur) - 15} more in .cleanup/issues.json")
+    print_leaks(repo, data, found, version)
     untracked = git(repo, "ls-files", "--others", "--exclude-standard").split()
     if untracked:
         print(f"warning: {len(untracked)} untracked files were not scanned (e.g. {untracked[0]}); "
