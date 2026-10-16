@@ -19,23 +19,22 @@ class Deptry(Step):
     package = "deptry"
     version = "0.25.1"
     policy = {
-        "deps-none": "no dependency list where pip or uv look for one (pyproject.toml, requirements.txt, setup.py)",
+        "deps-none": "no pyproject.toml dependencies or requirements.txt at the repo root",
         "deps-undeclared": "an import that isn't a declared dependency, or only a dev one",
         "deps-unused": "declared dependency that is never imported",
-        "deps-unreadable": ("dependencies listed only where pip reads them but deptry can't (setup.py, setup.cfg, "
-                            "requirements-*.txt)"),
     }
-    metrics = (Metric("deps_missing", "Dependency problems"),)
+    metrics = (Metric("deps_missing", "Dependency problems",
+                      description="imports not declared as dependencies, and declared ones never imported"),)
 
     def no_dependency_list(self, repo: Path) -> dict:
-        """High when pip and uv find no dependency list at the repo root; low when the only one is where deptry
-        can't read it. A list anywhere else (env/, environment.yml, PEP 723 script blocks) doesn't count."""
-        unreadable = [n for n in ("setup.py", "setup.cfg") if (repo / n).exists()] + \
+        """No pyproject.toml dependencies or requirements.txt at the repo root. A list anywhere else (setup.py,
+        requirements-dev.txt, env/, environment.yml, PEP 723 script blocks) doesn't count; one at the root is named."""
+        elsewhere = [n for n in ("setup.py", "setup.cfg") if (repo / n).exists()] + \
             sorted(p.name for p in repo.glob("requirements?*.txt"))
+        found = f"; found only {', '.join(elsewhere)}" if elsewhere else ""
         return self.issue(
-            "DEPS", "readiness", "no-dependency-list", "deps-unreadable" if unreadable else "deps-none",
-            f"Dependencies are declared only in {', '.join(unreadable)}, which deptry can't check" if unreadable
-            else "No dependency list where pip or uv look for one (pyproject.toml, requirements.txt, setup.py)",
+            "DEPS", "readiness", "no-dependency-list", "deps-none",
+            f"No pyproject.toml dependencies or requirements.txt at the repo root{found}",
             key="DEPS|declare", effort="S",
             fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies), or in a requirements.txt "
                  "at the repo root. Move a list kept elsewhere (env/, environment.yml, a script's PEP 723 block) "

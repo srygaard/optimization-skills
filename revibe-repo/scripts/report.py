@@ -10,7 +10,7 @@ from tools import policies, scorecard_metrics
 # --- scorecard -------------------------------------------------------------------------------------
 
 def scorecard(snaps: list) -> list:
-    """Rows of [metric, value per snapshot, delta (last minus first, with two or more), reference] for every
+    """Rows of [metric, value per snapshot, delta (last minus first, with two or more), description] for every
     metric that any of the snapshots measured: the measure steps' in step order, then the open-issue counts.
     measure, compare and report all print these rows."""
     rows = []
@@ -21,8 +21,7 @@ def scorecard(snaps: list) -> list:
         row = [m.label, *("-" if v is None else m.form.format(v) for v in vals)]
         if len(snaps) >= 2:
             row.append(change(vals[0], vals[-1]))
-        ref = m.reference
-        rows.append(row + [f"{ref[0]} / {ref[1]}" if ref else ""])
+        rows.append(row + [m.description])
     return rows
 
 
@@ -42,8 +41,8 @@ def print_scorecard(snap: dict):
     at = f"  @ {snap['commit'][:8]}" if snap.get("label") else ""
     print(f"scorecard  {column(snap)}{at}{' (dirty)' if snap['dirty'] else ''}  "
           f"release: {snap['release_status'].upper()}")
-    for label, value, ref in scorecard([snap]):
-        print(f"  {label:<24}{value:>10}" + (f"   (paper, human / agent code: {ref})" if ref else ""))
+    for label, value, _ in scorecard([snap]):
+        print(f"  {label:<24}{value:>10}")
     o = snap["open_issues"]
     print(f"  {'Open issues':<24}" + " · ".join(f"{o[s.name]} {s.name}" for s in Severity))
     for tool, why in snap["not_measured"].items():
@@ -147,7 +146,7 @@ def scorecard_section(cols: list) -> list:
     if not cols:
         return ["No snapshot yet: run `cleanup.py measure`."]
     delta = ["Δ"] if len(cols) >= 2 else []
-    lines = md_table(["metric", *(column(s) for s in cols), *delta, "reference (paper: human / agent)"],
+    lines = md_table(["metric", *(column(s) for s in cols), *delta, "description"],
                      scorecard(cols))
     if not_measured := cols[-1].get("not_measured"):
         lines += ["", "Not measured: " + "; ".join(f"{k} ({v[:80]})" for k, v in not_measured.items())]

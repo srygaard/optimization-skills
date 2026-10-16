@@ -28,16 +28,23 @@ class ScbCheck(Step):
         "complex-small": "function with CC > 10 and a smaller mass",
         "repetition-small": "smaller duplicate group of {min_clone_lines}+ lines",
     }
-    # references: SlopCodeBench (arXiv 2603.24755), maintained human Python repos / agent-written code. Only
-    # Verbosity and Erosion compare: scb-check 0.2.0 measures Violation % and Clone Ratio differently.
+    # the averages quoted are SlopCodeBench's (arXiv 2603.24755), for maintained human Python repos and agent-written
+    # code; only Verbosity and Erosion compare, since scb-check 0.2.0 measures the other ratios differently
     metrics = (
-        Metric("loc", "LOC"),
-        Metric("verbosity", "Verbosity", "{:.3f}", reference=(0.15, 0.33)),
-        Metric("erosion", "Erosion", "{:.3f}", reference=(0.31, 0.68)),
-        Metric("cog_erosion", "Cognitive erosion", "{:.3f}"),
-        Metric("violation_pct", "Violation %", "{:.3f}"),
-        Metric("clone_ratio", "Clone Ratio", "{:.3f}"),
-        Metric("cc_over_10", "Functions CC > 10"),
+        Metric("loc", "LOC", description="lines of code in scope"),
+        Metric("verbosity", "Verbosity", "{:.3f}",
+               description="share of lines that are duplicated or flagged by slop rules (maintained human code "
+                           "averages 0.15, agent code 0.33)"),
+        Metric("erosion", "Erosion", "{:.3f}",
+               description="share of complexity mass (CC × √SLOC) in functions with CC > 10 (human code averages "
+                           "0.31, agent code 0.68)"),
+        Metric("cog_erosion", "Cognitive erosion", "{:.3f}",
+               description="the same share, by cognitive complexity: nesting costs more"),
+        Metric("violation_pct", "Violation %", "{:.3f}", description="share of lines flagged by slop rules"),
+        Metric("clone_ratio", "Clone Ratio", "{:.3f}", description="share of lines in duplicated blocks"),
+        Metric("cc_over_10", "Functions CC > 10",
+               description="functions with cyclomatic complexity over 10 (`and`/`or` count): the work list "
+                           "behind Erosion"),
         # the absolute amounts behind the ratios: deleting clean code raises a ratio without adding slop
         Metric("verbosity_flagged_loc", warn="verbosity-flagged LOC"),
         Metric("high_cc_mass", warn="mass in functions with CC > 10"),

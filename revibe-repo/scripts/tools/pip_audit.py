@@ -21,7 +21,7 @@ class PipAudit(Step):
         "vuln-unfixed": "known vulnerability without a fixed release",
         "pins-none": "no lockfile or pinned requirements: can't audit, installs aren't reproducible",
     }
-    metrics = (Metric("vulnerable_deps", "Vulnerable deps"),)
+    metrics = (Metric("vulnerable_deps", "Vulnerable deps", description="pinned dependencies with known vulnerabilities"),)
 
     def vuln_issue(self, name: str, version: str, vulns: list, label: str) -> dict:
         """A vulnerable dependency, with the lowest release that fixes all of its known vulnerabilities."""

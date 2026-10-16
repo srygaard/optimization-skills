@@ -78,15 +78,16 @@ def cmd_measure(a):
     snap["not_measured"].update(not_measured)
     if scope.syntax_errors:
         snap["not_measured"]["parse"] = f"{len(scope.syntax_errors)} files don't parse: {scope.syntax_errors[:3]}"
-    merge(data, found, measured)
-    retired = {  # sources no longer run: their open issues are dismissed
-        "ruff": "scb-check reports complexity now",
-        "git-history": "large files are checked at HEAD only now, by measure",
+    retired = {  # (source, category) no longer checked: their open issues are dismissed, before merge can close them
+        ("ruff", "complexity"): "scb-check reports complexity now",
+        ("git-history", "large-file"): "large files are checked at HEAD only now, by measure",
+        ("magic-numbers", "red-flag"): "ruff reports magic numbers in comparisons now",
     }
     for i in cleanup.open_issues():
-        if i.get("source") in retired:
+        if why := retired.get((i.get("source"), i["category"])):
             i["status"] = "dismissed"
-            i["note"] = f"no longer checked: {retired[i['source']]}"
+            i["note"] = f"no longer checked: {why}"
+    merge(data, found, measured)
     data["tools"].update(tools)
     if cleanup.snapshot_path(cleanup.commit).exists():
         print(f"note: replacing the metrics of {cleanup.commit[:8]}, measured before", file=sys.stderr)

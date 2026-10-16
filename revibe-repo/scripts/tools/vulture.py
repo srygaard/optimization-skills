@@ -23,7 +23,8 @@ class Vulture(Step):
         # set by `adjust` on other tools' issues
         "inside-dead-code": "complexity or a red flag inside a dead-code candidate: delete that instead",
     }
-    metrics = (Metric("dead_code_loc", "Dead code LOC"),)
+    metrics = (Metric("dead_code_loc", "Dead code LOC",
+                      description="lines in functions, classes and modules nothing uses or names"),)
 
     def dead_issue(self, c: dict, with_coverage: bool) -> dict:
         """Open, or dismissed when something names the symbol or its body ran."""

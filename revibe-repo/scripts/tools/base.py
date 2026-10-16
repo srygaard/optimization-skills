@@ -29,8 +29,8 @@ class Metric(NamedTuple):
     key: str  # its key in Result.metrics and the snapshots
     label: str = ""  # its scorecard row; "" keeps it off the scorecard
     form: str = "{:,}"
-    reference: tuple | None = None  # (maintained human code, agent code), from SlopCodeBench
     warn: str = ""  # what `compare` calls it when it goes up; "" when a rise is no regression
+    description: str = ""  # what it measures, in the report's scorecard
 
 
 class Tool:
@@ -55,7 +55,7 @@ class Tool:
         self.settings = settings or {}
         if self.severity.keys() != self.policy.keys():
             raise ValueError(f"{self.name}: severities for {sorted(self.severity)}, but its policy is {sorted(self.policy)}")
-        texts = [*self.policy.values(), *(text for m in self.metrics for text in (m.label, m.warn))]
+        texts = [*self.policy.values(), *(text for m in self.metrics for text in (m.label, m.warn, m.description))]
         named = {field for text in texts for _, field, _, _ in string.Formatter().parse(text) if field}
         if missing := named - self.settings.keys():
             raise ValueError(f"{self.name}: no setting for {', '.join(sorted(missing))}")
@@ -65,8 +65,9 @@ class Tool:
         return {key: (self.severity[key], when.format(**self.settings)) for key, when in self.policy.items()}
 
     def scorecard_metrics(self) -> list:
-        """The metrics with their labels and warnings filled in from the settings."""
-        return [m._replace(label=m.label.format(**self.settings), warn=m.warn.format(**self.settings))
+        """The metrics with their labels, warnings and descriptions filled in from the settings."""
+        return [m._replace(label=m.label.format(**self.settings), warn=m.warn.format(**self.settings),
+                           description=m.description.format(**self.settings))
                 for m in self.metrics]
 
     def adjust(self, found: list):
