@@ -141,14 +141,18 @@ def offline():
     def broken(repo, files, index):
         raise KeyError("total_loc")
 
-    cases = [  # (file, text, strings_only), name, module, named?, mentioned?
-        (("tests/test_a.py", "net.train()\n", False), "train", "trainer", False, True),
-        (("data.py", 'load(split="train")\n', True), "train", "trainer", False, True),
-        (("configs/a.yaml", "target: pkg.trainer.train\n", False), "train", "trainer", True, False),
-        (("tests/test_b.py", "from pkg.trainer import (\n    Trainer,\n    train,\n)\n", False), "train", "trainer",
+    trainer = ["trainer", "pkg"]  # pkg/trainer.py: the module, then its packages
+    cases = [  # (file, text, strings_only), name, modules, named?, mentioned?
+        (("tests/test_a.py", "net.train()\n", False), "train", trainer, False, True),
+        (("data.py", 'load(split="train")\n', True), "train", trainer, False, True),
+        (("configs/a.yaml", "target: pkg.trainer.train\n", False), "train", trainer, True, False),
+        (("tests/test_b.py", "from pkg.trainer import (\n    Trainer,\n    train,\n)\n", False), "train", trainer,
          True, False),
-        (("pyproject.toml", 'fit = "pkg.trainer:train"\n', False), "train", "trainer", True, False),
-        (("main.py", 'cfg = {"target": "main.SetupCallback"}\n', True), "SetupCallback", "main", True, False),
+        (("pyproject.toml", 'fit = "pkg.trainer:train"\n', False), "train", trainer, True, False),
+        (("main.py", 'cfg = {"target": "main.SetupCallback"}\n', True), "SetupCallback", ["main"], True, False),
+        (("configs/kl.yaml", "target: ldm.modules.losses.LPIPS\n", False), "LPIPS",
+         ["contperceptual", "losses", "modules", "ldm"], True, False),  # re-exported by losses/__init__.py
+        (("utils.py", "# matlab 'imresize' function\n", True), "imresize", ["utils"], False, True),
     ]
     results = [code._named_in([ref], name, module) for ref, name, module, _, _ in cases]
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)

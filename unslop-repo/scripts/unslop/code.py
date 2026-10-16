@@ -236,14 +236,16 @@ def _references(repo: Path, shipped: list) -> list:
     return out
 
 
-def _named_in(refs: list, name: str, module: str) -> tuple:
-    """(files that name it, files that only mention it). Naming takes its module: `module.name` or
-    `module:name` (a yaml `target:`, an entry point, a "main.SetupCallback" string in the code) or
-    `from ...module import name`. A bare `.name` or "name" (`model.train()`, `split="train"`) is only a
+def _named_in(refs: list, name: str, modules: list) -> tuple:
+    """(files that name it, files that only mention it). Naming takes its module or a package above it:
+    `module.name` or `module:name` (a yaml `target:`, an entry point, a "main.SetupCallback" string in the
+    code) or `from ...module import name`. A bare `.name` or "name" (`model.train()`, `split="train"`) is only a
     mention, left for review. Dunders are never references."""
     if name.startswith("__") and name.endswith("__"):
         return [], []
-    n, m = re.escape(name), re.escape(module)
+    # `modules`: the defining module and its packages, since `pkg/__init__.py` often re-exports a class that
+    # configs then name as `pkg.Name`
+    n, m = re.escape(name), "(?:" + "|".join(map(re.escape, modules)) + ")"
     qualified = re.compile(rf"\b{m}[.:]{n}\b|\bfrom\s+[\w.]*\b{m}\s+import\s*(?:\([^)]*|[^\n]*)\b{n}\b")
     in_string = re.compile(rf"[\"'][^\"'\n]*\b{m}[.:]{n}[\"']")
     bare, bare_string = re.compile(rf"\b{n}\b"), re.compile(rf"[\"']{n}[\"']")
@@ -301,9 +303,9 @@ def vulture_dead(repo, files, index) -> Result:
         d = index.at_def_line(file, line)
         qual = d[2] if d and m["name"] and d[2].endswith(m["name"]) else (m["name"] or index.qualname(file, line))
         name = qual.rsplit(".", 1)[-1]
-        module = Path(file).parent.name if Path(file).stem == "__init__" else Path(file).stem
+        modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
         # unreachable code can't be referenced
-        hits, mentions = _named_in(refs, name, module) if m["kind"] else ([], [])
+        hits, mentions = _named_in(refs, name, modules) if m["kind"] else ([], [])
         ran = bool(coverage.get(file, set()) & runtime_lines(index, file, line))
         if not hits and not ran:
             total += size
