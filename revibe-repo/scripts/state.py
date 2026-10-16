@@ -44,11 +44,11 @@ class Cleanup:
         self.path = self.dir / "issues.json"
         self.data = load_issues(self.path)
 
-    def open_issues(self, *severities: str) -> list:
+    def open_issues(self, *severities: Severity) -> list:
         """The open issues, of the given severities if any are given."""
         return [
             i for i in self.data["issues"]
-            if i["status"] == "open" and (not severities or i["severity"] in severities)
+            if i["status"] == "open" and (not severities or Severity[i["severity"]] in severities)
         ]
 
     def leak_scan_current(self) -> bool:
@@ -62,7 +62,7 @@ class Cleanup:
 
     def release_status(self) -> str:
         """Blocked while any critical or high issue is open, or while the leak scan is older than HEAD."""
-        blocked = not self.leak_scan_current() or self.open_issues("critical", "high")
+        blocked = not self.leak_scan_current() or self.open_issues(Severity.critical, Severity.high)
         return "blocked" if blocked else "clear"
 
     def snapshot(self, label: str) -> dict:
