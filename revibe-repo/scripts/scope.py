@@ -4,7 +4,7 @@ import ast
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .common import git
+from common import git
 
 
 def matches(rel: str, pattern: str) -> bool:

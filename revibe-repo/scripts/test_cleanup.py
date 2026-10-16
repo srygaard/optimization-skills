@@ -25,9 +25,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
-from unslop import common, measure, scope, state, tools
-from unslop.tools import betterleaks, deptry, scb_check, vulture
-from unslop.tools.base import Result, Tool
+import common
+import measure
+import scope
+import state
+import tools
+from tools import betterleaks, deptry, scb_check, vulture
+from tools.base import Result, Tool
 
 CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
 failures = []
@@ -385,7 +389,7 @@ def end_to_end():
                            capture_output=True, text=True)
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .cleanup/ runs on its own")
         check(not any(f.name == "__pycache__" for f in (repo / ".cleanup").rglob("*")) and
-              not (CLEANUP.parent / "unslop/__pycache__").exists(), "no __pycache__ in .cleanup/ or the skill folder")
+              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .cleanup/ or the skill folder")
         files = [f.read_text(errors="replace") for f in (repo / ".cleanup").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
         check(not leaked, f"no plaintext secret in output or .cleanup/ {leaked or ''}")

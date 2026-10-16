@@ -4,8 +4,8 @@ import json
 import re
 from pathlib import Path
 
-from ..common import git, pyproject
-from .base import Result, Tool
+from common import git, pyproject
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="vulture",

@@ -5,8 +5,8 @@ The measure steps satisfy `Step`. The leak steps, `betterleaks` and `large_files
 function that `cleanup.py leaks` calls.
 """
 
-from . import betterleaks, deptry, file_length, large_files, license, module_globals, pip_audit, scb_check, vulture
-from .base import Step
+from tools import betterleaks, deptry, file_length, large_files, license, module_globals, pip_audit, scb_check, vulture
+from tools.base import Step
 
 MEASURE: tuple[Step, ...] = (scb_check, vulture, deptry, pip_audit, license, file_length, module_globals)
 ANALYZERS = tuple(m for m in MEASURE if m.TOOL.package)  # the tools cleanup.py's script header pins

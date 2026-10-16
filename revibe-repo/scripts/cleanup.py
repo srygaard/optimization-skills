@@ -23,9 +23,9 @@ import argparse
 import sys
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .cleanup/
-from unslop.leaks import cmd_leaks
-from unslop.measure import cmd_measure
-from unslop.report import cmd_compare, cmd_report
+from leaks import cmd_leaks
+from measure import cmd_measure
+from report import cmd_compare, cmd_report
 
 
 def main():

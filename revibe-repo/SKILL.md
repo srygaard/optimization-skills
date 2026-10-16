@@ -1,5 +1,5 @@
 ---
-name: unslop-repo
+name: revibe-repo
 description: >-
   Measurable, prioritized cleanup of a Python ML research repo before open-sourcing it. Use when
   preparing a lab or research codebase for public release, auditing code quality, or planning and
@@ -13,7 +13,7 @@ description: >-
   agent can work from, and .cleanup/issues.json, with every finding and its severity.
 ---
 
-# Unslop a repo before open-sourcing
+# Revibe a repo before open-sourcing
 
 A router. One script measures, tracks and reports; depth lives in `references/`.
 
@@ -78,7 +78,7 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 | **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, big files in history, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
-The exact rules are the `policy` of each tool's `TOOL` in `scripts/unslop/tools/`, the one place its
+The exact rules are the `policy` of each tool's `TOOL` in `scripts/tools/`, the one place its
 severities are set, and the thresholds they use are its `settings`. Every report.md ends with them, so an agent working from the report sees them too.
 
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
@@ -150,23 +150,24 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 ## 5. The script
 
 `scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
-scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Its code lives in `scripts/unslop/`:
-`common` (schema and helpers), `state` (issues.json and snapshots), `scope` (the files in scope),
+scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. The modules it imports sit next to it:
+`common` (severity and helpers), `state` (issues.json and snapshots), `scope` (the files in scope),
 `leaks`, `measure`, `report`, and `tools/`, one module per tool. Each tool module starts with its `TOOL`
 (name, PyPI package, settings, severity policy), then runs the tool and turns what it finds into issues;
 `tools/base.py` defines `Tool`, which builds every issue, and the `Result` a measure step returns.
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
 `tools/pip_audit.py` when bumping it); deptry runs as `python -m deptry`, since its API exits the
 process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
-unless the SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
+unless the SHA-256 matches the pinned value, and caches it in `~/.cache/revibe-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
 - `scripts/test_cleanup.py` checks the bookkeeping offline (`--offline`, a second), then
   builds a throwaway repo with one known instance of each finding and checks all of them, including
   that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
-- `report` copies `cleanup.py` and `unslop/` (the leak rules are `unslop/tools/betterleaks.toml`) into
-  `.cleanup/`, so another agent can re-measure with `.cleanup/cleanup.py` without this skill.
+- `report` copies `cleanup.py`, its modules and `tools/` (which holds the leak rules,
+  `betterleaks.toml`) into `.cleanup/`, so another agent can re-measure with `.cleanup/cleanup.py`
+  without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).

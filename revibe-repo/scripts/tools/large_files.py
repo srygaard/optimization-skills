@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from ..common import git, run
-from .base import Tool
+from common import git, run
+from tools.base import Tool
 
 TOOL = Tool(
     name="git-history",

@@ -6,8 +6,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from ..common import run
-from .base import Result, Tool, ToolError
+from common import run
+from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(
     name="pip-audit",
