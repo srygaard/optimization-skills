@@ -3,9 +3,9 @@
 import hashlib
 from pathlib import Path
 
-from state import Severity, load_issues, merge, now, save_issues, state_dir
+from state import Cleanup, Severity, merge, now
 from tools import betterleaks, large_files
-from utils.git import git, head, repo_root
+from utils.git import git, head
 from utils.process import run
 
 
@@ -21,9 +21,10 @@ def print_leaks(repo: Path, data: dict, found: list, version: str):
 
 
 def cmd_leaks(a):
-    repo = repo_root(a.repo)
-    d = state_dir(repo)
-    data = load_issues(d)
+    """`cleanup.py leaks`: Betterleaks and large files over the full history, folded into issues.json."""
+    cleanup = Cleanup(a.repo)
+    repo = cleanup.repo
+    data = cleanup.data
     exe = betterleaks.executable()
     version = run([exe, "version"]).stdout.strip() or "?"
     # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
@@ -36,7 +37,7 @@ def cmd_leaks(a):
         "commit": head(repo), "date": now(), "betterleaks": version, "internal": internal,
         "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12],
     }
-    save_issues(d, data, repo)
+    cleanup.save()
     print_leaks(repo, data, found, version)
     untracked = git(repo, "ls-files", "--others", "--exclude-standard").split()
     if untracked:

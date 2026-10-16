@@ -1,4 +1,5 @@
-"""Everything under REPO/.cleanup/: issues.json (load, check, merge, save) and the snapshots."""
+"""REPO/.cleanup/issues.json, the single source of truth: the issues, the snapshots and the leak scan. Every
+command opens it as a `Cleanup`; report.md is generated from it."""
 
 import datetime as dt
 import hashlib
@@ -6,7 +7,7 @@ import json
 from enum import IntEnum
 from pathlib import Path
 
-from utils.git import head
+from utils.git import head, repo_root
 
 
 class Severity(IntEnum):
@@ -20,35 +21,108 @@ class Severity(IntEnum):
 
 
 def now() -> str:
-    """The current time as issues.json and the snapshots record it: UTC, to the second."""
+    """The current time as issues.json records it: UTC, to the second."""
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
 # --- issues.json -----------------------------------------------------------------------------------
 
 
-def state_dir(repo: Path) -> Path:
-    d = repo / ".cleanup"
-    (d / "snapshots").mkdir(parents=True, exist_ok=True)
-    if not (d / ".gitignore").exists():
-        (d / ".gitignore").write_text("*\n")
-    return d
+class Cleanup:
+    """A repo's .cleanup/ folder and its issues.json, loaded and checked."""
+
+    def __init__(self, path: str):
+        self.repo = repo_root(path)
+        self.dir = self.repo / ".cleanup"
+        self.dir.mkdir(exist_ok=True)
+        if not (self.dir / ".gitignore").exists():
+            (self.dir / ".gitignore").write_text("*\n")
+        self.path = self.dir / "issues.json"
+        self.data = load_issues(self.path)
+
+    def open_issues(self, *severities: str) -> list:
+        """The open issues, of the given severities if any are given."""
+        return [
+            i for i in self.data["issues"]
+            if i["status"] == "open" and (not severities or i["severity"] in severities)
+        ]
+
+    def leak_scan_current(self) -> bool:
+        """Whether the leak scan ran on HEAD."""
+        return self.data.get("leak_scan", {}).get("commit") == head(self.repo)
+
+    def require_leak_scan(self):
+        """Stop the command unless the leak scan ran on HEAD."""
+        if not self.leak_scan_current():
+            raise SystemExit("the leak scan is mandatory: run `cleanup.py leaks <repo>` on the current commit first")
+
+    def release_status(self) -> str:
+        """Blocked while any critical or high issue is open, or while the leak scan is older than HEAD."""
+        blocked = not self.leak_scan_current() or self.open_issues("critical", "high")
+        return "blocked" if blocked else "clear"
+
+    def snapshot(self, label: str) -> dict:
+        """The snapshot `measure --label` recorded; stops the command if there is none."""
+        snaps = self.data["snapshots"]
+        if label not in snaps:
+            raise SystemExit(f"no snapshot '{label}' (have: {', '.join(sorted(snaps)) or 'none'})")
+        return snaps[label]
+
+    def latest_snapshot(self, exclude: str = "") -> dict | None:
+        """The most recent snapshot, other than `exclude`."""
+        snaps = [s for label, s in self.data["snapshots"].items() if label != exclude]
+        return max(snaps, key=lambda s: s["date"]) if snaps else None
+
+    def count_issues(self, snap: dict):
+        """Set the snapshot fields that come from the issues rather than from the tools."""
+        still_open = self.open_issues()
+        snap["metrics"]["red_flags_open"] = sum(i["category"] == "red-flag" for i in still_open)
+        snap["metrics"]["leaks_open"] = sum(i["category"] == "leak" for i in still_open)
+        snap["open_issues"] = {s.name: sum(i["severity"] == s.name for i in still_open) for s in Severity}
+        snap["release_status"] = self.release_status()
+
+    def save(self):
+        """Write issues.json as valid JSON with one issue and one snapshot per line, so `grep <ID>` shows a whole
+        issue. Review adds and closes issues after `measure`, so the snapshot taken at HEAD is recounted first:
+        the baseline then includes the red flags found in review. Snapshots of older commits keep their counts."""
+        data = self.data
+        data["issues"].sort(key=lambda i: (
+            i["status"] != "open", -Severity[i["severity"]], i["category"],
+            -(i.get("evidence") or {}).get("weight", (i.get("evidence") or {}).get("lines", 0)), i["id"]))
+        data["commit"] = head(self.repo)
+        data["generated"] = now()
+        data["release_status"] = self.release_status()
+        latest = self.latest_snapshot()
+        if latest and latest["commit"] == data["commit"]:
+            self.count_issues(latest)
+        meta = [f"  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in data.items()
+                if k not in ("issues", "snapshots", "defaults")]
+        issues = ",\n".join("    " + json.dumps(i, ensure_ascii=False) for i in data["issues"])
+        snaps = ",\n".join(f"    {json.dumps(label)}: {json.dumps(s, ensure_ascii=False)}"
+                           for label, s in data["snapshots"].items())
+        defaults = json.dumps(data.get("defaults", {}), separators=(",", ":"))
+        self.path.write_text("{\n" + "\n".join(meta) + f'\n  "issues": [\n{issues}\n  ],\n'
+                             f'  "snapshots": {{\n{snaps}\n  }},\n  "defaults": {defaults}\n}}\n')
 
 
-def load_issues(d: Path) -> dict:
-    p = d / "issues.json"
-    if not p.exists():
-        return {"schema": 1, "repo": d.parent.name, "tools": {}, "issues": []}
+def load_issues(path: Path) -> dict:
+    """issues.json, checked, or an empty one if there is none yet."""
+    if not path.exists():
+        return {"schema": 1, "repo": path.parent.parent.name, "tools": {}, "issues": [], "snapshots": {}}
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
-        raise SystemExit(f"{p} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .cleanup/ is not in git, so "
-            "there is no older copy")
-    check_issues(data, p)
+        raise SystemExit(f"{path} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .cleanup/ is not in "
+            "git, so there is no older copy")
+    if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list) \
+            or not isinstance(data.setdefault("snapshots", {}), dict):
+        raise SystemExit(f"{path} must be an object with an \"issues\" list and a \"snapshots\" object")
+    data.setdefault("tools", {})
+    check_issues(data["issues"], path)
     return data
 
 
-def check_issues(data, path: Path):
+def check_issues(issues: list, path: Path):
     """issues.json is edited by hand, so a typo must stop the command rather than drop the issue from the
     report and the release gate. Missing optional fields get their defaults."""
     defaults = {"source": "agent", "rule": "", "file": "", "line": None, "end_line": None, "symbol": "",
@@ -56,11 +130,9 @@ def check_issues(data, path: Path):
     statuses = ("open", "fixed", "dismissed")
     categories = ("leak", "internal-ref", "large-file", "license", "vulnerable-dependency", "readiness",
                   "dead-code", "complexity", "red-flag", "file-length", "globals", "bug")
-    if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list):
-        raise SystemExit(f"{path} must be an object with an \"issues\" list")
     problems = []
     seen = set()
-    for n, i in enumerate(data["issues"], 1):
+    for n, i in enumerate(issues, 1):
         ident = i.get("id") or f"issue #{n}"
         if missing := [k for k in ("id", "category", "severity", "summary") if not i.get(k)]:
             problems.append(f"{ident}: missing {', '.join(missing)}")
@@ -77,44 +149,6 @@ def check_issues(data, path: Path):
         seen.add(ident)
     if problems:
         raise SystemExit(f"{path} needs fixing by hand (`grep <ID>` finds each issue):\n  " + "\n  ".join(problems[:20]))
-
-
-def open_issues(data: dict, *severities: str) -> list:
-    return [
-        i for i in data["issues"]
-        if i["status"] == "open" and (not severities or i["severity"] in severities)
-    ]
-
-
-def leak_scan_current(data: dict, repo: Path) -> bool:
-    return data.get("leak_scan", {}).get("commit") == head(repo)
-
-
-def release_status(data: dict, repo: Path) -> str:
-    """Blocked while any critical or high issue is open, or while the leak scan is older than HEAD."""
-    blocked = not leak_scan_current(data, repo) or open_issues(data, "critical", "high")
-    return "blocked" if blocked else "clear"
-
-
-def require_leak_scan(data: dict, repo: Path):
-    if not leak_scan_current(data, repo):
-        raise SystemExit("the leak scan is mandatory: run `cleanup.py leaks <repo>` on the current commit first")
-
-
-def save_issues(d: Path, data: dict, repo: Path):
-    """Valid JSON with one issue per line, so `grep <ID> issues.json` shows a whole issue."""
-    data["issues"].sort(key=lambda i: (
-        i["status"] != "open", -Severity[i["severity"]], i["category"],
-        -(i.get("evidence") or {}).get("weight", (i.get("evidence") or {}).get("lines", 0)), i["id"]))
-    data["commit"] = head(repo)
-    data["generated"] = now()
-    data["release_status"] = release_status(data, repo)
-    meta = [f"  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in data.items()
-            if k not in ("issues", "defaults")]
-    issues = ",\n".join("    " + json.dumps(i, ensure_ascii=False) for i in data["issues"])
-    defaults = json.dumps(data.get("defaults", {}), separators=(",", ":"))
-    (d / "issues.json").write_text("{\n" + "\n".join(meta) + f'\n  "issues": [\n{issues}\n  ],\n'
-                                   f'  "defaults": {defaults}\n}}\n')
 
 
 def _digest(value) -> str:
@@ -159,44 +193,3 @@ def merge(data: dict, found: list, sources: set):
             i["status"] = "fixed"
             i["note"] = "no longer detected"
             defaults.setdefault(i["id"], {}).update(status=_digest("fixed"), note=_digest("no longer detected"))
-
-
-# --- snapshots ---------------------------------------------------------------------------------
-
-
-def load_snapshot(d: Path, label: str) -> dict:
-    p = d / "snapshots" / f"{label}.json"
-    if not p.exists():
-        have = ", ".join(sorted(x.stem for x in (d / "snapshots").glob("*.json"))) or "none"
-        raise SystemExit(f"no snapshot '{label}' (have: {have})")
-    return json.loads(p.read_text())
-
-
-def write_snapshot(d: Path, snap: dict) -> Path:
-    path = d / "snapshots" / f"{snap['label']}.json"
-    path.write_text(json.dumps(snap, indent=2) + "\n")
-    return path
-
-
-def count_issues(snap: dict, data: dict, repo: Path):
-    """The snapshot fields that come from issues.json rather than from the tools."""
-    still_open = open_issues(data)
-    snap["metrics"]["red_flags_open"] = sum(i["category"] == "red-flag" for i in still_open)
-    snap["metrics"]["leaks_open"] = sum(i["category"] == "leak" for i in still_open)
-    snap["open_issues"] = {s.name: sum(i["severity"] == s.name for i in still_open) for s in Severity}
-    snap["release_status"] = release_status(data, repo)
-
-
-def recount_head_snapshot(d: Path, data: dict, repo: Path):
-    """Review adds and closes issues after `measure`, so recount the snapshot taken at HEAD: the baseline
-    then includes the red flags found in review. Snapshots of older commits keep their counts."""
-    snap = latest_snapshot(d)
-    if snap and snap["commit"] == head(repo):
-        count_issues(snap, data, repo)
-        write_snapshot(d, snap)
-
-
-def latest_snapshot(d: Path, exclude: str = "") -> dict | None:
-    snaps = [json.loads(p.read_text()) for p in (d / "snapshots").glob("*.json")]
-    snaps = [s for s in snaps if s["label"] != exclude]
-    return max(snaps, key=lambda s: s["date"]) if snaps else None
