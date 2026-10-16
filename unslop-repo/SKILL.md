@@ -66,7 +66,7 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 | **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, big files in history, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, other history-only findings, unused deps, no lockfile | Low |
 
-The exact rules and thresholds are `POLICY` in `scripts/cleanup.py`, the one place severities are set.
+The exact rules and thresholds are `POLICY` in `scripts/unslop/common.py`, the one place severities are set.
 Every report.md ends with them, so an agent working from the report sees them too.
 
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
@@ -135,18 +135,21 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 
 ## 5. The script
 
-`scripts/cleanup.py` is a single PEP 723 file. It uses only the stdlib, and runs the analyzers through
-pinned `uvx`: scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1.
-Betterleaks 1.9.0 is not on PyPI. The script downloads its release binary once, refuses it unless the
-SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
+`scripts/cleanup.py` is the only entry point, a PEP 723 script using only the stdlib. Its code lives in
+`scripts/unslop/`, one module per concern: `common` (pins, thresholds, `POLICY`), `state` (issues.json
+and snapshots), `leaks`, `code` (scope, scb-check, vulture), `project` (dependencies, license, file
+length), `measure` and `report`. The analyzers run through pinned `uvx`: scb-check 0.2.0, vulture
+2.16, deptry 0.25.1, pip-audit 2.10.1. Betterleaks 1.9.0 is not on PyPI: the script downloads its
+release binary once, refuses it unless the SHA-256 matches the pinned value, and caches it in
+`~/.cache/unslop-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
 - `scripts/test_cleanup.py` checks the parsers and bookkeeping offline (`--offline`, a second), then
   builds a throwaway repo with one known instance of each finding and checks all of them, including
   that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
-- `report` copies `cleanup.py` and `leak_rules.toml` into `.cleanup/`, so another agent can re-measure
-  with `.cleanup/cleanup.py` without this skill.
+- `report` copies `cleanup.py`, `unslop/` and `leak_rules.toml` into `.cleanup/`, so another agent can
+  re-measure with `.cleanup/cleanup.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).

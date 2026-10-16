@@ -35,7 +35,7 @@ To change the file itself:
 
 ## Severity
 
-Severities come from `POLICY` in `cleanup.py`, and every report.md ends with the list. A rule's
+Severities come from `POLICY` in `unslop/common.py`, and every report.md ends with the list. A rule's
 confidence separates a certain credential (critical, wherever it is) from a possible one (high, to
 review); internal references and large files matter most while they are at HEAD.
 
@@ -73,14 +73,14 @@ lives in a temp dir that is deleted at once.
 
 ## Betterleaks binary
 
-`cleanup.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
-x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the value in the script, and
+`unslop/common.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
+x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the pinned value, and
 caches it in `~/.cache/unslop-repo/` (or `$XDG_CACHE_HOME`).
 
 - **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
   `BETTERLEAKS=/path/to/betterleaks`.
 - **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
-  verify the signature, then update `BETTERLEAKS_VERSION` and the four SHA-256 values in the script:
+  verify the signature, then update `BETTERLEAKS_VERSION` and the four SHA-256 values in `unslop/common.py`:
 
   ```bash
   uvx sigstore verify github --bundle checksums.txt.sigstore.json --repository betterleaks/betterleaks \
