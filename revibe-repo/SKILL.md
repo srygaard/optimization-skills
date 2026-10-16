@@ -154,15 +154,20 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 | Magic comparisons | ruff PLR2004 | comparisons against unnamed numbers (`if n_atoms > 38:`). Positional arguments and indices don't count: they are normal in scientific code. A function comparing against 3+ distinct ones gets a medium issue; every other function, and each module's top-level code, gets a low one |
 | String paths | ruff PTH | `os.path`, `open()` and `glob` calls on string paths, where pathlib reads better. One low issue counts them: convert the code you touch anyway |
 
-- **Reference averages** from SlopCodeBench (arXiv 2603.24755), quoted in the report's metric descriptions:
-  maintained human Python repos average Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68.
-  They are for orientation, not targets. scb-check 0.2.0 measures Violation % and Clone Ratio differently
-  from the paper, so those two have none.
+- **Reference averages** from SlopCodeBench, quoted in the report's metric descriptions, from the latest
+  version of the paper that reports each. Verbosity and Erosion (arXiv 2603.24755v2, Table 2: 473
+  maintained human Python repos): human code averages 0.19 and 0.34, agent-written code 0.44 and 0.68.
+  Violation % and Clone Ratio (v1, Table 2; v2 dropped them): human 0.11 and 0.06, agent 0.32 and 0.08.
+  They are for orientation, not targets. scb-check 0.2.0 measures Violation % and Clone Ratio with its own
+  rules and clone detection, so compare their changes, not their levels. The paper has no reference for
+  Cognitive erosion.
 - **Ratios can rise when you delete clean code.** `compare` warns on absolute amounts instead: verbosity-
   flagged LOC, mass in high-CC functions, suppressions, files over 1000 code lines, module-level globals.
   A warning after a refactor means it added slop.
-- **Erosion and verbosity predict maintenance cost, not bugs** (paper, Appendix G). Net LOC is the
-  simplest honest signal: most cleanup commits should delete more than they add.
+- **Erosion predicts maintenance cost, not failures** (paper v2, Appendix B.3): it correlates with the
+  cost of the next change, not with whether that change passes its tests, and plain size (LOC) predicts
+  cost better still. Net LOC is the simplest honest signal: most cleanup commits should delete more than
+  they add.
 - **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues.
   deptry needs `pyproject.toml` dependencies or a `requirements.txt`; pip-audit needs a pinned source
   (`uv.lock`, `pylock.toml`, pinned requirements, `.venv`). It never resolves unpinned requirements,
