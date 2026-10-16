@@ -307,6 +307,7 @@ def normalize_b(rows):
           "def bucket(n_atoms):\n    if n_atoms > 38:\n        return 'large'\n    if n_atoms > 12:\n"
           "        return 'medium'\n    return 'small' if n_atoms > 5 else 'tiny'\n")
     write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
+    write("conftest.py", "import pytest\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account={account}\npython -m pkg.main --data {mila}\n")
@@ -412,6 +413,8 @@ def end_to_end():
         check(one("red-flag", "magic-numbers", symbol="bucket", severity="medium") and metrics["magic_comparisons"] > 0
               and not one("red-flag", "magic-numbers", symbol="route"),
               "comparisons against unnamed numbers -> medium magic-numbers issue; arguments and indices don't count")
+        check(not any(i["rule"] in ("DEP001", "DEP004") and i["symbol"] == "pytest" for i in data["issues"]),
+              "tests are out of deptry's scope: `import pytest` in conftest.py is no finding")
         check(one("pathlib", "string-paths", severity="low") and metrics["string_paths"] > 0,
               "os.path calls -> one low string-paths issue, and a scorecard count")
         check(metrics["suppressions"] == 1, "a `# noqa` comment is a suppression; the same text in a string is not")
