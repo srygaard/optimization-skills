@@ -70,8 +70,11 @@ cheap uses when the repo already has fast tests:
 
 ## 4. Commit discipline
 
-- One issue per commit, with a [Conventional Commits](https://www.conventionalcommits.org/) message
-  and a `Cleanup-Issue: <ID>` footer: `test:` for the safety net, `refactor:` for dead code,
+- One commit per family of fix: the issues one kind of change closes, such as all the dead code, all the
+  internal paths, or all the magic thresholds. A refactor of one complex function is a family of its own.
+  Split a family by package when one diff would be too big to review or revert. Use a
+  [Conventional Commits](https://www.conventionalcommits.org/) message and a `Cleanup-Issue: <ID>` footer
+  line for each issue the commit closes: `test:` for the safety net, `refactor:` for dead code,
   complexity and duplication, `fix:` for a bug, `chore:` or `build:` for dependencies, `docs:` for the
   README and license. A scope is optional (`refactor(data): ...`).
 - Run the safety net after every commit; revert rather than debug forward.
