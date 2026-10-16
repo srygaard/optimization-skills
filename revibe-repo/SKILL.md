@@ -55,8 +55,9 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 ```
 
 - The safety net goes under `tests/`, in its own commit, before the first refactor.
-- Each fix commit carries a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit;
-  revert rather than debug forward. Delete dead code before refactoring what is left.
+- Each fix commit has a Conventional Commits message (`refactor:`, `fix:`, `test:`, ...) and a
+  `Cleanup-Issue: <ID>` footer (see [safety-net.md](references/safety-net.md)). Run the safety net
+  after each commit; revert rather than debug forward. Delete dead code before refactoring what is left.
 - Every new commit needs a new `leaks` run before `measure` or `report`. Only the first reads the full
   history; later runs read the files at HEAD, which takes seconds. A secret committed and removed between
   two runs is never seen, so run it on every commit. After rewriting the history, run `leaks --history`.

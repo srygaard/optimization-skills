@@ -70,8 +70,10 @@ cheap uses when the repo already has fast tests:
 
 ## 4. Commit discipline
 
-- One issue per commit, with a `Cleanup-Issue: <ID>` trailer.
+- One issue per commit, with a [Conventional Commits](https://www.conventionalcommits.org/) message
+  and a `Cleanup-Issue: <ID>` footer: `test:` for the safety net, `refactor:` for dead code,
+  complexity and duplication, `fix:` for a bug, `chore:` or `build:` for dependencies, `docs:` for the
+  README and license. A scope is optional (`refactor(data): ...`).
 - Run the safety net after every commit; revert rather than debug forward.
-- Keep behavior changes (bugs found on the way) in their own commits, and say so in the message.
+- Keep behavior changes (bugs found on the way) in their own `fix:` commits.
 - Leave scripts that reproduce published results alone: freeze or tag them.
-- If the project uses `torch.compile`, count graph breaks before and after (pytorch-compile skill).
