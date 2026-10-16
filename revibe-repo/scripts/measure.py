@@ -1,4 +1,4 @@
-"""`cleanup.py measure`: run the tools, merge their issues, record a snapshot in issues.json."""
+"""`cleanup.py measure`: run the tools, merge their issues, record the metrics of this commit."""
 
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -8,7 +8,7 @@ from scope import Scope, shipped_files
 from state import Cleanup, merge, now
 from tools import ANALYZERS, MEASURE
 from tools.base import ToolError
-from utils.git import git, head
+from utils.git import git
 
 
 # --- measure ---------------------------------------------------------------------------------------
@@ -55,18 +55,19 @@ def run_steps(scope, steps=MEASURE) -> tuple:
 
 
 def cmd_measure(a):
-    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, record a snapshot."""
+    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, and write this commit's
+    metrics to .revibe/<commit>/metrics.json."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
     repo = cleanup.repo
     data = cleanup.data
     tools = tool_versions()  # fail before any step runs
     default_excludes = ("tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
-                        ".cleanup/**")
+                        ".revibe/**")
     excludes = list(dict.fromkeys([*default_excludes, *a.exclude]))
     scope = Scope(repo, shipped_files(repo, excludes))
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
-    snap = {"label": a.label, "date": now(), "commit": head(repo), "dirty": dirty, "scope": excludes,
+    snap = {"label": a.label, "date": now(), "commit": cleanup.commit, "dirty": dirty, "scope": excludes,
             "tools": tools, "files": len(scope.files), "metrics": {}, "not_measured": {}}
     found, metrics, not_measured, measured = run_steps(scope)
     snap["metrics"].update(metrics)
@@ -83,9 +84,9 @@ def cmd_measure(a):
             i["status"] = "dismissed"
             i["note"] = f"no longer checked: {retired[i['source']]}"
     data["tools"].update(tools)
-    if a.label in data["snapshots"]:
-        print(f"note: overwriting snapshot {a.label}", file=sys.stderr)
-    data["snapshots"][a.label] = snap
-    cleanup.save()  # also counts the issues into the snapshot
+    if cleanup.snapshot_path(cleanup.commit).exists():
+        print(f"note: replacing the metrics of {cleanup.commit[:8]}, measured before", file=sys.stderr)
+    path = cleanup.write_snapshot(snap)
+    cleanup.save()
     print_scorecard(snap)
-    print(f"-> {cleanup.path}")
+    print(f"-> {cleanup.path}  ·  {path}")

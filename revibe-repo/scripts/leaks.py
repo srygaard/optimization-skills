@@ -16,7 +16,7 @@ def print_leaks(repo: Path, data: dict, found: list, scanners: str):
     for i in [i for i in data["issues"] if i["id"] in ids][:15]:
         print(f"  {i['id']}  {i['severity']:<8} {i['status']:<9} {i['summary'][:90]}")
     if len(found) > 15:
-        print(f"  ... {len(found) - 15} more in .cleanup/issues.json")
+        print(f"  ... {len(found) - 15} more in .revibe/issues.json")
 
 
 def cmd_leaks(a):

@@ -6,11 +6,12 @@
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 
     cleanup.py leaks   REPO [--internal REGEX ...]    secrets and internal refs in all history (run first)
-    cleanup.py measure REPO [--label L] [--exclude G]  metrics snapshot + mechanical issues
-    cleanup.py compare REPO BASE [--to LABEL]         before/after table and regression warnings
-    cleanup.py report  REPO                           render REPO/.cleanup/report.md
+    cleanup.py measure REPO [--label L] [--exclude G]  this commit's metrics + mechanical issues
+    cleanup.py compare REPO [BASE] [--to REF]         before/after table and regression warnings
+    cleanup.py report  REPO                           render REPO/.revibe/report.md
 
-Everything is written to REPO/.cleanup/, which ignores itself in git. Secret values never reach
+Everything is written to REPO/.revibe/, which ignores itself in git: issues.json, report.md, and a folder
+per measured commit with its metrics.json. Secret values never reach
 stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_cleanup.py.
 
 The analyzers are pinned above and run in this script's environment, so `measure` needs `uv run --script`
@@ -22,7 +23,7 @@ sigstore-signed checksums.txt, and cached. Set BETTERLEAKS=/path/to/betterleaks 
 import argparse
 import sys
 
-sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .cleanup/
+sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .revibe/
 from leaks import cmd_leaks
 from measure import cmd_measure
 from report import cmd_compare, cmd_report
@@ -35,16 +36,16 @@ def main():
     p.add_argument("repo")
     p.add_argument("--internal", action="append", default=[], metavar="REGEX",
                    help="extra internal-reference pattern (RE2); repeatable")
-    p = sub.add_parser("measure", help="metrics snapshot and mechanical issues")
+    p = sub.add_parser("measure", help="this commit's metrics and mechanical issues")
     p.add_argument("repo")
-    p.add_argument("--label", default="baseline")
+    p.add_argument("--label", default="", help="a name for this commit's metrics, e.g. baseline")
     p.add_argument("--exclude", action="append", default=[], metavar="GLOB",
                    help="extra path glob to leave out of the metrics; repeatable")
-    p = sub.add_parser("compare", help="before/after table")
+    p = sub.add_parser("compare", help="two measured commits side by side")
     p.add_argument("repo")
-    p.add_argument("base")
-    p.add_argument("--to", help="snapshot to compare with (default: the latest)")
-    p = sub.add_parser("report", help="render .cleanup/report.md")
+    p.add_argument("base", nargs="?", help="a label, commit or git ref (default: the baseline)")
+    p.add_argument("--to", help="a label, commit or git ref (default: the latest measured)")
+    p = sub.add_parser("report", help="render .revibe/report.md")
     p.add_argument("repo")
     a = ap.parse_args()
     {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)

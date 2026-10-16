@@ -34,7 +34,7 @@ easier to understand, use or change. A flag on code that is about to be deleted 
 
 ## Recording a red flag
 
-Append to `issues` in `.cleanup/issues.json`. Use IDs `RF-A1`, `RF-A2`, and so on; `measure` never
+Append to `issues` in `.revibe/issues.json`. Use IDs `RF-A1`, `RF-A2`, and so on; `measure` never
 touches issues with `"source": "agent"`.
 
 ```json
@@ -48,4 +48,4 @@ touches issues with `"source": "agent"`.
 
 **Keep the count comparable.** After the phase, review the same files again: mark fixed flags
 `fixed`, and add any new ones. The open red-flag count before and after is the measure. Run `report`
-after each review: it recounts the snapshot taken at HEAD, so the baseline includes the flags you added.
+after each review: it recounts HEAD's metrics, so the baseline includes the flags you added.
