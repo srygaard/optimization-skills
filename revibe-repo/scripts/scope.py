@@ -3,6 +3,7 @@
 import ast
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import NamedTuple
 
 from common import git
 
@@ -42,8 +43,18 @@ def module_globals(tree: ast.Module) -> list:
     return sorted(n for n in names if not (n.startswith("__") and n.endswith("__")))
 
 
+class Def(NamedTuple):
+    """A function or class: its span (decorators included), qualified name, `def` line and kind."""
+
+    start: int
+    end: int
+    qualname: str
+    def_line: int
+    kind: str  # "function" or "class"
+
+
 class CodeIndex:
-    """Functions and classes per file (qualname, span), each file's length, and its module-level globals."""
+    """Functions and classes per file (a `Def` each), each file's length, and its module-level globals."""
 
     def __init__(self, repo: Path, files: list):
         self.defs = {}
@@ -65,25 +76,27 @@ class CodeIndex:
                 for child in ast.iter_child_nodes(node):
                     if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                         start = min([child.lineno] + [x.lineno for x in child.decorator_list])
-                        defs.append((start, child.end_lineno, prefix + child.name, child.lineno,
-                                     "class" if isinstance(child, ast.ClassDef) else "function"))
+                        defs.append(Def(start, child.end_lineno, prefix + child.name, child.lineno,
+                                        "class" if isinstance(child, ast.ClassDef) else "function"))
                         walk(child, prefix + child.name + ".")
                     else:
                         walk(child, prefix)
 
             walk(tree, "")
 
-    def enclosing(self, rel: str, line: int):
-        """Innermost def/class containing `line`: (start, end, qualname, def_line, kind) or None."""
+    def enclosing(self, rel: str, line: int) -> Def | None:
+        """The innermost function or class whose span holds `line`."""
         best = None
         for d in self.defs.get(rel, ()):
-            if d[0] <= line <= d[1] and (best is None or d[0] >= best[0]):
+            if d.start <= line <= d.end and (best is None or d.start >= best.start):
                 best = d
         return best
 
-    def at_def_line(self, rel: str, line: int):
-        return next((d for d in self.defs.get(rel, ()) if d[3] == line), None) or self.enclosing(rel, line)
+    def at_def_line(self, rel: str, line: int) -> Def | None:
+        """The function or class defined on `line`, else the one that holds it."""
+        return next((d for d in self.defs.get(rel, ()) if d.def_line == line), None) or self.enclosing(rel, line)
 
     def qualname(self, rel: str, line: int) -> str:
+        """The qualified name of what holds `line`, or "<module>"."""
         d = self.enclosing(rel, line)
-        return d[2] if d else "<module>"
+        return d.qualname if d else "<module>"
