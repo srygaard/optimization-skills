@@ -157,7 +157,9 @@ scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. The modules it i
 `state` (issues.json, its severity scale and the snapshots), `scope` (the files in scope), `leaks`,
 `measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module per purpose). Each tool module starts with its `TOOL`
 (name, PyPI package, settings, severity policy), then runs the tool and turns what it finds into issues;
-`tools/base.py` defines `Tool`, which builds every issue, and the `Result` a measure step returns.
+`tools/base.py` defines `Tool`, which builds every issue, the `Result` every tool returns, and `Step`, the
+protocol of a measure step: `measure(scope) -> Result`, where the `Scope` (`scope.py`) holds the repo, the
+files in scope and what they define. The leak tools have `scan` instead.
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
 `tools/pip_audit.py` when bumping it); deptry runs as `python -m deptry`, since its API exits the
 process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it

@@ -1,11 +1,10 @@
 """`cleanup.py measure`: run the tools, merge their issues, record a snapshot in issues.json."""
 
-import re
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
 from report import print_scorecard
-from scope import CodeIndex, shipped_files
+from scope import Scope, shipped_files
 from state import Cleanup, merge, now
 from tools import ANALYZERS, MEASURE, vulture
 from tools.base import ToolError
@@ -25,7 +24,7 @@ def tool_versions() -> dict:
             "pinned in its header")
 
 
-def run_steps(repo, files, index, steps=MEASURE) -> tuple:
+def run_steps(scope, steps=MEASURE) -> tuple:
     """Run the measure steps: (issues, metrics, not_measured, measured). A step that fails or has nothing
     to read is not measured, and one broken step doesn't lose the others' results."""
     found = []
@@ -34,7 +33,7 @@ def run_steps(repo, files, index, steps=MEASURE) -> tuple:
     measured = set()
     for step in steps:
         try:
-            r = step.measure(repo, files, index)
+            r = step.measure(scope)
         except Exception as e:
             not_measured[step.TOOL.name] = str(e) if isinstance(e, ToolError) else f"error: {e!r}"
             continue
@@ -48,11 +47,6 @@ def run_steps(repo, files, index, steps=MEASURE) -> tuple:
     return found, metrics, not_measured, measured
 
 
-def count_suppressions(repo, files: list) -> int:
-    pattern = re.compile(r"#\s*(?:noqa|scbc\s+ignore)", re.I)
-    return sum(len(pattern.findall((repo / f).read_text(errors="replace"))) for f in files)
-
-
 def cmd_measure(a):
     """`cleanup.py measure`: run every measure step, fold their issues into issues.json, record a snapshot."""
     cleanup = Cleanup(a.repo)
@@ -63,17 +57,15 @@ def cmd_measure(a):
     default_excludes = ("tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
                         ".cleanup/**")
     excludes = list(dict.fromkeys([*default_excludes, *a.exclude]))
-    files = shipped_files(repo, excludes)
-    index = CodeIndex(repo, files)
+    scope = Scope(repo, shipped_files(repo, excludes))
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
     snap = {"label": a.label, "date": now(), "commit": head(repo), "dirty": dirty, "scope": excludes,
-            "tools": tools, "files": len(files), "metrics": {}, "not_measured": {}}
-    found, metrics, not_measured, measured = run_steps(repo, files, index)
+            "tools": tools, "files": len(scope.files), "metrics": {}, "not_measured": {}}
+    found, metrics, not_measured, measured = run_steps(scope)
     snap["metrics"].update(metrics)
     snap["not_measured"].update(not_measured)
-    snap["metrics"]["suppressions"] = count_suppressions(repo, files)
-    if index.syntax_errors:
-        snap["not_measured"]["parse"] = f"{len(index.syntax_errors)} files don't parse: {index.syntax_errors[:3]}"
+    if scope.syntax_errors:
+        snap["not_measured"]["parse"] = f"{len(scope.syntax_errors)} files don't parse: {scope.syntax_errors[:3]}"
     vulture.mark_inside_dead_code(found)
     merge(data, found, measured)
     retired = {"ruff": "scb-check reports complexity now"}  # sources no longer run: their open issues are dismissed

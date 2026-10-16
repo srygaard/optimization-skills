@@ -1,10 +1,11 @@
-"""What a tool module provides, its TOOL and a `measure` or `scan` function, and what it returns: issues built
-by `Tool.issue`, and for a measure step a `Result`."""
+"""What a tool module provides, its TOOL and a `measure` or `scan` function, and what both return: a `Result`
+of issues built by `Tool.issue`."""
 
 import hashlib
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import NamedTuple, Protocol
+from typing import NamedTuple, Protocol, runtime_checkable
+
+from scope import Scope
 
 
 class ToolError(Exception):
@@ -12,7 +13,7 @@ class ToolError(Exception):
 
 
 class Result(NamedTuple):
-    """What a measure step found. A step with nothing to read sets `skipped`: it measured nothing, so its
+    """What a tool found. A step with nothing to read sets `skipped`: it measured nothing, so its
     earlier issues stay open instead of being closed as fixed."""
 
     issues: list
@@ -54,9 +55,10 @@ class Tool:
         }
 
 
+@runtime_checkable
 class Step(Protocol):
-    """A measure step: a tool module with a `measure` function."""
+    """A measure step: a tool module with a TOOL and a `measure` function."""
 
     TOOL: Tool
 
-    def measure(self, repo: Path, files: list, index) -> Result: ...
+    def measure(self, scope: Scope) -> Result: ...

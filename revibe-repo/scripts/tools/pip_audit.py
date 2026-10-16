@@ -68,13 +68,13 @@ def vuln_issue(name: str, version: str, vulns: list, label: str) -> dict:
         done_when=f"pip-audit reports no vulnerabilities for {name}.")
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     from pip_audit._audit import Auditor
     from pip_audit._dependency_source import DependencySourceError
     from pip_audit._service import PyPIService, ServiceError
 
     with tempfile.TemporaryDirectory(prefix="cleanup-audit-") as tmp:
-        source, label = audit_source(repo, Path(tmp))
+        source, label = audit_source(scope.repo, Path(tmp))
         if source is None:
             return Result([TOOL.issue(
                 "DEPS", "readiness", "no-pinned-dependencies", "pins-none",
