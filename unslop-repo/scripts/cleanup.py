@@ -1219,16 +1219,28 @@ def fmt(key: str, value) -> str:
     return "-" if value is None else fmt_.format(value)
 
 
+def scorecard(snaps: list) -> list:
+    """Rows of [metric, value per snapshot, delta (with two snapshots), reference] for every metric
+    that any of the snapshots measured. measure, compare and report all print these rows."""
+    rows = []
+    for key, label, _ in ROWS:
+        vals = [s["metrics"].get(key) for s in snaps]
+        if all(v is None for v in vals):
+            continue
+        row = [label, *(fmt(key, v) for v in vals)]
+        if len(snaps) == 2:
+            b, n = vals
+            row.append("" if b is None or n is None else f"{n - b:+,}" if isinstance(b, int) else f"{n - b:+.3f}")
+        ref = REFERENCE.get(key)
+        rows.append(row + [f"{ref[0]} / {ref[1]}" if ref else ""])
+    return rows
+
+
 def print_scorecard(snap: dict):
-    m = snap["metrics"]
     print(f"scorecard  {snap['label']}  @ {snap['commit'][:8]}{' (dirty)' if snap['dirty'] else ''}  "
           f"release: {snap['release_status'].upper()}")
-    for key, label, _ in ROWS:
-        if key not in m:
-            continue
-        ref = REFERENCE.get(key)
-        hint = f"   (paper: human {ref[0]}, agent code {ref[1]})" if ref else ""
-        print(f"  {label:<22}{fmt(key, m[key]):>10}{hint}")
+    for label, value, ref in scorecard([snap]):
+        print(f"  {label:<22}{value:>10}" + (f"   (paper, human / agent code: {ref})" if ref else ""))
     o = snap["open_issues"]
     print("  Open issues           " + " · ".join(f"{o[s]} {s}" for s in SEVERITIES))
     for tool, why in snap["not_measured"].items():
@@ -1284,16 +1296,12 @@ def cmd_compare(a):
     after = load_snapshot(d, a.to) if a.to else latest_snapshot(d, exclude=a.base)
     if after is None:
         die("nothing to compare: run `cleanup.py measure --label <after>` first")
+    rows = scorecard([base, after]) + [
+        [f"open {s}", base["open_issues"][s], after["open_issues"][s],
+         f"{after['open_issues'][s] - base['open_issues'][s]:+}", ""] for s in SEVERITIES]
     print(f"{'metric':<22}{base['label']:>14}{after['label']:>14}{'delta':>10}")
-    for key, label, _ in ROWS:
-        b, n = base["metrics"].get(key), after["metrics"].get(key)
-        if b is None and n is None:
-            continue
-        delta = "" if b is None or n is None else (f"{n - b:+,}" if isinstance(b, int) else f"{n - b:+.3f}")
-        print(f"{label:<22}{fmt(key, b):>14}{fmt(key, n):>14}{delta:>10}")
-    for s in SEVERITIES:
-        print(f"{'open ' + s:<22}{base['open_issues'][s]:>14}{after['open_issues'][s]:>14}"
-              f"{after['open_issues'][s] - base['open_issues'][s]:>+10}")
+    for label, b, n, delta, _ in rows:
+        print(f"{label:<22}{b:>14}{n:>14}{delta:>10}")
     for w in comparison_warnings(base, after):
         print(f"warning: {w}")
 
@@ -1331,6 +1339,11 @@ def cell(text) -> str:
     return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
 
 
+def md_table(header: list, rows: list) -> list:
+    return ["| " + " | ".join(header) + " |", "|" + "---|" * len(header),
+            *("| " + " | ".join(cell(x) for x in row) + " |" for row in rows)]
+
+
 def where(i: dict) -> str:
     loc = f"{i['file']}:{i['line']}" if i.get("file") and i.get("line") else i.get("file") or ""
     sym = i.get("symbol") or ""
@@ -1354,21 +1367,9 @@ def render_report(repo: Path, data: dict, d: Path) -> str:
         cols = [base] if base else []
         if not base or latest["label"] != base["label"]:
             cols.append(latest)
-        lines.append("| metric | " + " | ".join(s["label"] for s in cols)
-                     + (" | Δ" if len(cols) == 2 else "") + " | reference (paper: human / agent) |")
-        lines.append("|---" * (len(cols) + (3 if len(cols) == 2 else 2)) + "|")
-        for key, label, _ in ROWS:
-            vals = [s["metrics"].get(key) for s in cols]
-            if all(v is None for v in vals):
-                continue
-            row = [label, *[fmt(key, v) for v in vals]]
-            if len(cols) == 2:
-                b, n = vals
-                row.append("" if b is None or n is None else
-                           f"{n - b:+,}" if isinstance(b, int) else f"{n - b:+.3f}")
-            ref = REFERENCE.get(key)
-            row.append(f"{ref[0]} / {ref[1]}" if ref else "")
-            lines.append("| " + " | ".join(row) + " |")
+        header = ["metric", *(s["label"] for s in cols), *(["Δ"] if len(cols) == 2 else []),
+                  "reference (paper: human / agent)"]
+        lines += md_table(header, scorecard(cols))
         if not_measured := latest.get("not_measured"):
             lines += ["", "Not measured: " + "; ".join(f"{k} ({v[:80]})" for k, v in not_measured.items())]
         if len(cols) == 2:
@@ -1382,22 +1383,20 @@ def render_report(repo: Path, data: dict, d: Path) -> str:
         if not items:
             lines.append("Nothing open.")
             continue
-        done = phase != "Low"
-        lines.append("| ID | severity | where | problem | fix |" + (" done when |" if done else "") + " effort |")
-        lines.append("|---|---|---|---|---|" + ("---|" if done else "") + "---|")
-        prev = {}
+        done = phase != "Low"  # Low issues are optional: no done-when column
+        rows, prev = [], {}
         for i in items:
             same = {k: "same as above" if i[k] and i[k] == prev.get(k) else i[k] for k in ("fix", "done_when")}
-            row = [i["id"], i["severity"], where(i), i["summary"], same["fix"]]
-            row += [same["done_when"]] if done else []
-            lines.append("| " + " | ".join(cell(x) for x in [*row, i["effort"]]) + " |")
+            rows.append([i["id"], i["severity"], where(i), i["summary"], same["fix"],
+                         *([same["done_when"]] if done else []), i["effort"]])
             prev = i
+        lines += md_table(["ID", "severity", "where", "problem", "fix", *(["done when"] if done else []), "effort"],
+                          rows)
     dismissed = [i for i in data["issues"] if i["status"] == "dismissed"]
     fixed = [i for i in data["issues"] if i["status"] == "fixed"]
     lines += ["", f"## Dismissed ({len(dismissed)})", ""]
-    lines += (["| ID | where | problem | reason |", "|---|---|---|---|"]
-              + [f"| {i['id']} | {cell(where(i))} | {cell(i['summary'])} | {cell(i['note'])} |" for i in dismissed]
-              if dismissed else ["None."])
+    lines += (md_table(["ID", "where", "problem", "reason"],
+                       [[i["id"], where(i), i["summary"], i["note"]] for i in dismissed]) if dismissed else ["None."])
     lines += ["", f"Fixed so far: {len(fixed)} issue(s).", "", "## Severity rules", "",
               "Set by `POLICY` in cleanup.py; red flags and bugs you add keep the severity you give them.", ""]
     lines += [f"- **{sev}:** " + "; ".join(when for s, when in POLICY.values() if s == sev) for sev in SEVERITIES]
