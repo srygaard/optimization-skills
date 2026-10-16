@@ -305,7 +305,8 @@ def normalize_b(rows):
     write("pkg/trainer.py", "import os\n\n\ndef train(model, steps):\n    for _ in range(steps):\n        model.step()\n"
           "    model.save(os.path.join('runs', 'last.pt'))\n    return model\n\n\n"
           "def bucket(n_atoms):\n    if n_atoms > 38:\n        return 'large'\n    if n_atoms > 12:\n"
-          "        return 'medium'\n    return 'small' if n_atoms > 5 else 'tiny'\n")
+          "        return 'medium'\n    return 'small' if n_atoms > 5 else 'tiny'\n\n\n"
+          "def is_image_batch(x):\n    return x.ndim == 4\n")
     write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
     write("conftest.py", "import pytest\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
@@ -413,6 +414,8 @@ def end_to_end():
         check(one("red-flag", "magic-numbers", symbol="bucket", severity="medium") and metrics["magic_comparisons"] > 0
               and not one("red-flag", "magic-numbers", symbol="route"),
               "comparisons against unnamed numbers -> medium magic-numbers issue; arguments and indices don't count")
+        check(one("red-flag", "magic-numbers", symbol="is_image_batch", severity="low"),
+              "a function comparing against fewer unnamed numbers -> its own low magic-numbers issue")
         check(not any(i["rule"] in ("DEP001", "DEP004") and i["symbol"] == "pytest" for i in data["issues"]),
               "tests are out of deptry's scope: `import pytest` in conftest.py is no finding")
         check(one("pathlib", "string-paths", severity="low") and metrics["string_paths"] > 0,
