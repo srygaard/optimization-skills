@@ -22,9 +22,9 @@ import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
-import cleanup as c
+from unslop import code, common, leaks, measure, project, state
 
-CLEANUP = Path(c.__file__).resolve()
+CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
 failures = []
 
 
@@ -73,7 +73,7 @@ warning[except-pass-silence]: except clause with bare pass silently swallows err
 
 def offline():
     print("offline")
-    found = c.parse_scb(SCB_SAMPLE)
+    found = code.parse_scb(SCB_SAMPLE)
     check([f["rule"] for f in found] == ["trivial-wrapper", "duplicate-structure", "erosion", "except-pass-silence"],
           "scb-check findings are parsed")
     check(found[1]["locs"] == [("/r/ldm/models/diffusion/classifier.py", 70), ("/r/ldm/models/diffusion/ddpm.py", 186)],
@@ -81,62 +81,62 @@ def offline():
     check(found[2]["notes"] == ["complexity: 25, sloc: 68 (threshold: complexity > 10)"],
           "a function's complexity and SLOC are parsed from its note line")
 
-    check(c.matches("tests/test_a.py", "tests/**") and not c.matches("pkg/tests/a.py", "tests/**"),
+    check(code.matches("tests/test_a.py", "tests/**") and not code.matches("pkg/tests/a.py", "tests/**"),
           "'tests/**' matches only the top-level tests/")
-    check(c.matches("a/b/test_x.py", "**/test_*.py") and c.matches("test_x.py", "**/test_*.py"),
+    check(code.matches("a/b/test_x.py", "**/test_*.py") and code.matches("test_x.py", "**/test_*.py"),
           "'**/' matches any depth, including none")
-    check(not c.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
+    check(not leaks.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
-    check(all(sev in c.SEVERITIES and when for sev, when in c.POLICY.values()), "every POLICY row has a severity")
+    check(all(sev in common.SEVERITIES and when for sev, when in common.POLICY.values()), "every POLICY row has a severity")
 
     def cx(symbol, policy="complex", **kw):
-        return c.issue("CX", "scb-check", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
+        return state.issue("CX", "scb-check", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
                        symbol=symbol, **kw)
 
     data = {"issues": []}
-    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
+    state.merge(data, [cx("f"), cx("g")], {"scb-check"})
     get = {i["symbol"]: i for i in data["issues"]}
     check(len(data["issues"]) == 2 and cx("f", line=3)["id"] == get["f"]["id"], "IDs don't depend on line numbers")
     get["f"].update(status="dismissed", note="deliberate")
-    c.merge(data, [cx("f"), cx("g", policy="complex-small")], {"scb-check"})
+    state.merge(data, [cx("f"), cx("g", policy="complex-small")], {"scb-check"})
     check(get["f"]["status"] == "dismissed", "an agent's dismissal survives a re-run")
     check(get["g"]["severity"] == "low", "a field the agent didn't edit takes the tool's new value")
-    c.merge(data, [cx("f")], {"scb-check"})
+    state.merge(data, [cx("f")], {"scb-check"})
     check(get["g"]["status"] == "fixed" and get["f"]["status"] == "dismissed",
           "an open issue that is no longer detected becomes fixed; a dismissed one stays dismissed")
-    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
+    state.merge(data, [cx("f"), cx("g")], {"scb-check"})
     check(get["g"]["status"] == "open", "a fixed issue that is detected again reopens")
-    c.merge(data, [], set())
+    state.merge(data, [], set())
     check(get["g"]["status"] == "open", "a tool that didn't run closes nothing")
     get["g"].update(status="fixed", note="refactored")
-    c.merge(data, [cx("f"), cx("g")], {"scb-check"})
+    state.merge(data, [cx("f"), cx("g")], {"scb-check"})
     check(get["g"]["status"] == "open" and "refactored" in get["g"]["note"],
           "an issue an agent marked fixed reopens while the tool still detects it, keeping the agent's note")
 
-    empty = c.CodeIndex(Path("/r"), [])
-    issues = c.scb_issues(SCB_SAMPLE, Path("/r"), empty, high_cc=1)
+    empty = code.CodeIndex(Path("/r"), [])
+    issues = code.scb_issues(SCB_SAMPLE, Path("/r"), empty, high_cc=1)
     check(sorted(i["category"] for i in issues) == ["complexity", "red-flag", "red-flag"],
           "scb-check output becomes a complexity issue, a wrapper and a duplicate group")
     raised = []
     for args in ((SCB_SAMPLE, Path("/r"), empty, 2), (SCB_SAMPLE.replace("┌─", "--"), Path("/r"), empty, 1)):
         try:
-            c.scb_issues(*args)
-        except c.ToolError:
+            code.scb_issues(*args)
+        except common.ToolError:
             raised.append(True)
     check(len(raised) == 2, "scb-check output that doesn't match its JSON totals or format is an error, not 'clean'")
     row = "pkg/a.py:5: unused function 'helper' (60% confidence, 5 lines)"
-    check(c.vulture_rows(row + "\n")[0]["name"] == "helper", "vulture lines are parsed")
+    check(code.vulture_rows(row + "\n")[0]["name"] == "helper", "vulture lines are parsed")
     try:
-        c.vulture_rows(row + "\nsomething vulture never printed before\n")
+        code.vulture_rows(row + "\nsomething vulture never printed before\n")
         check(False, "an unrecognized vulture line is an error")
-    except c.ToolError:
+    except common.ToolError:
         check(True, "an unrecognized vulture line is an error")
 
     def ok(repo, files, index):
-        return c.Result([cx("h")], {"m": 1})
+        return common.Result([cx("h")], {"m": 1})
 
     def nothing_to_read(repo, files, index):
-        return c.Result([], {}, skipped="no lockfile")
+        return common.Result([], {}, skipped="no lockfile")
 
     def broken(repo, files, index):
         raise KeyError("total_loc")
@@ -150,31 +150,31 @@ def offline():
         (("pyproject.toml", 'fit = "pkg.trainer:train"\n', False), "train", "trainer", True, False),
         (("main.py", 'cfg = {"target": "main.SetupCallback"}\n', True), "SetupCallback", "main", True, False),
     ]
-    results = [c._named_in([ref], name, module) for ref, name, module, _, _ in cases]
+    results = [code._named_in([ref], name, module) for ref, name, module, _, _ in cases]
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
               for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
 
     with tempfile.TemporaryDirectory() as tmp:
-        none = c.deptry_deps(Path(tmp), [], None)
+        none = project.deptry_deps(Path(tmp), [], None)
         Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
-        inline = c.deptry_deps(Path(tmp), ["tool.py"], None)
+        inline = project.deptry_deps(Path(tmp), ["tool.py"], None)
         check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
               "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
                                        "    def m(self):\n        return 2\n")
-        index = c.CodeIndex(Path(tmp), ["mod.py"])
-        check(c.runtime_lines(index, "mod.py", 4) == {5} and c.runtime_lines(index, "mod.py", 8) == {12},
+        index = code.CodeIndex(Path(tmp), ["mod.py"])
+        check(code.runtime_lines(index, "mod.py", 4) == {5} and code.runtime_lines(index, "mod.py", 8) == {12},
               "coverage counts function and method bodies, not def or class-body lines that run on import")
 
     with tempfile.TemporaryDirectory() as tmp:
         def load(text):
             (Path(tmp) / "issues.json").write_text(text)
             try:
-                return c.load_issues(Path(tmp))
-            except c.CleanupError as e:
+                return state.load_issues(Path(tmp))
+            except common.CleanupError as e:
                 return str(e)
 
         bug = {"id": "BUG-A1", "category": "bug", "severity": "high", "summary": "found while reading"}
@@ -188,14 +188,14 @@ def offline():
         error = load('{"issues": [}')
         check(isinstance(error, str) and "not valid JSON (line 1" in error, "broken JSON stops the command with its line")
 
-    found, metrics, not_measured, measured = c.run_steps(None, [], None, steps=(
+    found, metrics, not_measured, measured = measure.run_steps(None, [], None, steps=(
         ("a", ok), ("b", nothing_to_read), ("c", broken)))
     check(measured == {"a"} and set(not_measured) == {"b", "c"} and metrics == {"m": 1},
           "a skipped or broken step is not measured, and the other steps still count")
     check(found[0]["source"] == "a", "issues carry the name of the step that found them")
     data = {"issues": []}
-    c.merge(data, [dict(cx("v"), source="b")], {"b"})
-    c.merge(data, found, measured)
+    state.merge(data, [dict(cx("v"), source="b")], {"b"})
+    state.merge(data, found, measured)
     check(data["issues"][0]["status"] == "open", "a step that measured nothing doesn't close its issues")
 
 
@@ -416,7 +416,11 @@ def end_to_end():
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
         check("## Severity rules" in report and "- **critical:** credential" in report,
               "report ends with the severity rules")
-        check((repo / ".cleanup/cleanup.py").exists(), "report copies cleanup.py for handoff")
+        p = subprocess.run([sys.executable, str(repo / ".cleanup/cleanup.py"), "compare", r, "baseline"],
+                           capture_output=True, text=True)
+        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .cleanup/ runs on its own")
+        check(not any(f.name == "__pycache__" for f in (repo / ".cleanup").rglob("*")) and
+              not (CLEANUP.parent / "unslop/__pycache__").exists(), "no __pycache__ in .cleanup/ or the skill folder")
         files = [f.read_text(errors="replace") for f in (repo / ".cleanup").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
         check(not leaked, f"no plaintext secret in output or .cleanup/ {leaked or ''}")
