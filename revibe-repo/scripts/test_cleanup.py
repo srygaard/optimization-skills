@@ -56,8 +56,9 @@ def offline():
     check(all(sev in state.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
     check(len(rows) == sum(len(m.TOOL.policy) for m in tools.ALL), "no policy key is set by two tools")
     check(all(isinstance(m, Step) for m in tools.MEASURE), "every measure step has a TOOL and a measure function")
-    pinned = set(re.findall(r'"([\w.-]+)==', CLEANUP.read_text().split("# ///")[1]))
-    check(pinned == {m.TOOL.package for m in tools.ANALYZERS}, "cleanup.py's header pins exactly the analyzers' packages")
+    pinned = set(re.findall(r'"([\w.-]+==[\w.]+)"', CLEANUP.read_text().split("# ///")[1]))
+    check(pinned == {f"{m.TOOL.package}=={m.TOOL.version}" for m in tools.ANALYZERS},
+          "cleanup.py's header pins exactly the analyzers, at the versions their TOOL names")
 
     def cx(symbol, policy="complex", **kw):
         return scb_check.TOOL.issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",

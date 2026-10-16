@@ -11,6 +11,7 @@ from tools.base import Metric, Result, Tool
 TOOL = Tool(
     name="vulture",
     package="vulture",
+    version="2.16",
     policy={
         "dead-large": ("high", "unused function or class of {dead_high_lines}+ lines"),
         "dead-small": ("low", "unused function or class of {min_dead_lines}+ lines, under {dead_high_lines}"),

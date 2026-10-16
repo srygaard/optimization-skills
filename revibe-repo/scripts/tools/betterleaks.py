@@ -27,8 +27,8 @@ TOOL = Tool(
         "internal-head": ("high", "internal path, host, email or account at HEAD"),
         "internal-history": ("low", "internal reference only in history: a fresh squashed history drops it"),
     },
+    version="1.9.0",  # not on PyPI: the release binary is pinned here, with its checksums
     settings={
-        "version": "1.9.0",  # not on PyPI: the release binary is pinned here, with its checksums
         "sha256": {  # checksums.txt of the v1.9.0 release, signature verified with sigstore
             ("darwin", "arm64"): "83dd7eaab13d44a1e8e347a17064cdef153a1478db473276d41b38d55613d3f2",
             ("darwin", "x64"): "68dfd83458d9e7f90663daa7a81c7f944083b170dae82e4f5f8d0581ed519ef1",
@@ -76,7 +76,7 @@ def executable() -> Path:
         raise SystemExit(f"no pinned Betterleaks build for {sys.platform}/{platform.machine()}; "
             "set BETTERLEAKS=/path/to/betterleaks")
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    version = TOOL.settings["version"]
+    version = TOOL.version
     cache = cache / "revibe-repo" / f"betterleaks-{version}"
     exe = cache / "betterleaks"
     if exe.is_file():

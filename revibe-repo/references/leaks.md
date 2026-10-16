@@ -85,7 +85,7 @@ caches it in `~/.cache/revibe-repo/` (or `$XDG_CACHE_HOME`).
 - **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
   `BETTERLEAKS=/path/to/betterleaks`.
 - **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
-  verify the signature, then update `version` and the four `sha256` values in the `TOOL` settings of
+  verify the signature, then update the `version` and the four `sha256` values in the `TOOL` of
   `tools/betterleaks.py`:
 
   ```bash

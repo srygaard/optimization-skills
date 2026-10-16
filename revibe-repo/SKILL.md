@@ -153,7 +153,9 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 ## 5. The script
 
 `scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
-scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. The modules it imports sit next to it:
+scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Each tool's `TOOL` names the same
+version (a test keeps them equal), and `measure` stops if another one is installed. The modules it
+imports sit next to it:
 `state` (issues.json, its severity scale and the snapshots), `scope` (the files in scope), `leaks`,
 `measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module per purpose). Each tool module starts with its `TOOL`
 (name, PyPI package, settings, severity policy, scorecard metrics), then runs the tool and turns what it finds into issues;

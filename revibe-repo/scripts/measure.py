@@ -15,13 +15,18 @@ from utils.git import git, head
 
 
 def tool_versions() -> dict:
-    """{tool: version} of the analyzers that cleanup.py's script header pins. Stops when one is missing, as
-    it is when the script runs without uv."""
-    try:
-        return {m.TOOL.name: version(m.TOOL.package) for m in ANALYZERS}
-    except PackageNotFoundError as e:
-        raise SystemExit(f"{e.name} is not installed: run `uv run --script cleanup.py ...`, which installs the analyzers "
-            "pinned in its header")
+    """{tool: version} of the analyzers. Stops unless each is installed at the version its TOOL pins, as it
+    is when the script runs through uv: numbers from other versions don't compare."""
+    for m in ANALYZERS:
+        try:
+            installed = version(m.TOOL.package)
+        except PackageNotFoundError:
+            installed = ""
+        if installed != m.TOOL.version:
+            found = f"{installed} is installed" if installed else "it is not installed"
+            raise SystemExit(f"{m.TOOL.package} {m.TOOL.version} is pinned but {found}: run `uv run --script cleanup.py ...`, "
+                             "which installs the versions its header pins")
+    return {m.TOOL.name: m.TOOL.version for m in ANALYZERS}
 
 
 def run_steps(scope, steps=MEASURE) -> tuple:
