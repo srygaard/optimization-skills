@@ -91,8 +91,8 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
 | **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, working notes at the root, red flags you add | Medium |
-| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, functions with many magic numbers, working notes at the root, red flags you add | Medium |
+| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other magic numbers, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
 severity of every kind of finding it reports and the thresholds they use; the tool's class says what each
@@ -150,6 +150,7 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
 | Avg code lines per file, Files > 500 / > 1000 code lines | `tokenize`, `ast` | code lines per source file: comments, docstrings, imports and blank lines don't count, so documenting code never makes a file "too long". A file over 1000 gets a medium issue: split it into modules that each own one concept. A file that doesn't parse has no count (it is listed under not measured) |
 | Globals | `ast` | names a module binds outside its functions and classes, constants included, plus names declared `global`. One low issue holds the count and the files with the most |
+| Magic numbers | `ast` | numeric literals no name explains: not an assignment's value, a default, a keyword argument or a dict value, and not -1, 0, 1 or 2. A function with 5+ distinct ones gets a medium issue; one low issue counts the rest |
 
 - **Reference ranges** from SlopCodeBench (arXiv 2603.24755): maintained human Python repos average
   Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68. They are for orientation, not targets.
