@@ -1,89 +1,90 @@
-"""`cleanup.py measure`: run the steps, merge their issues, write a snapshot."""
+"""`cleanup.py measure`: run the tools, merge their issues, write a snapshot."""
 
+import re
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
-from .code import CodeIndex, scb_check, shipped_files, vulture_dead
-from .common import (
-    CleanupError, DEFAULT_EXCLUDES, POLICY, RETIRED_SOURCES, TOOLS, ToolError, git, head, now, repo_root,
-    uvx,
-)
-from .project import count_suppressions, deptry_deps, file_lengths, license_readme, pip_audit_vulns
+from .common import git, head, now, repo_root
 from .report import print_scorecard
+from .scope import CodeIndex, shipped_files
 from .state import (
     count_issues, load_issues, merge, open_issues, require_leak_scan, save_issues, state_dir,
     write_snapshot,
 )
+from .tools import ANALYZERS, MEASURE, vulture
+from .tools.base import ToolError
 
 
 # --- measure ---------------------------------------------------------------------------------------
 
-STEPS = (("scb-check", scb_check), ("vulture", vulture_dead),
-         ("deptry", deptry_deps), ("pip-audit", pip_audit_vulns), ("license", license_readme),
-         ("file-length", file_lengths))
+
+def tool_versions() -> dict:
+    """{tool: version} of the analyzers that cleanup.py's script header pins. Stops when one is missing, as
+    it is when the script runs without uv."""
+    try:
+        return {m.TOOL.name: version(m.TOOL.package) for m in ANALYZERS}
+    except PackageNotFoundError as e:
+        raise SystemExit(f"{e.name} is not installed: run `uv run --script cleanup.py ...`, which installs the analyzers "
+            "pinned in its header")
 
 
-def run_steps(repo, files, index, steps=None) -> tuple:
+def run_steps(repo, files, index, steps=MEASURE) -> tuple:
     """Run the measure steps: (issues, metrics, not_measured, measured). A step that fails or has nothing
     to read is not measured, and one broken step doesn't lose the others' results."""
     found = []
     metrics = {}
     not_measured = {}
     measured = set()
-    for name, step in steps or STEPS:
+    for step in steps:
         try:
-            r = step(repo, files, index)
+            r = step.measure(repo, files, index)
         except Exception as e:
-            not_measured[name] = str(e) if isinstance(e, (ToolError, CleanupError)) else f"error: {e!r}"
+            not_measured[step.TOOL.name] = str(e) if isinstance(e, ToolError) else f"error: {e!r}"
             continue
-        for i in r.issues:
-            i["source"] = name  # merge closes issues by source
         found += r.issues
         metrics.update(r.metrics)
         not_measured.update(r.notes or {})
         if r.skipped:
-            not_measured[name] = r.skipped
+            not_measured[step.TOOL.name] = r.skipped
         else:
-            measured.add(name)
+            measured.add(step.TOOL.name)
     return found, metrics, not_measured, measured
 
 
-def mark_inside_dead_code(found: list):
-    """Complexity and red-flag issues inside a dead-code candidate drop to low: delete before refactoring."""
-    dead = [i for i in found if i["category"] == "dead-code" and i["status"] == "open"]
-    for i in found:
-        if i["category"] not in ("complexity", "red-flag") or not i.get("line"):
-            continue
-        host = next((d for d in dead if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]), None)
-        if host:
-            i["severity"] = POLICY["inside-dead-code"][0]
-            i["evidence"]["inside_dead_code"] = host["id"]
-            i["fix"] = f"Inside dead-code candidate {host['id']}: delete that instead, unless it turns out to be used. " + i["fix"]
+def count_suppressions(repo, files: list) -> int:
+    pattern = re.compile(r"#\s*(?:noqa|scbc\s+ignore)", re.I)
+    return sum(len(pattern.findall((repo / f).read_text(errors="replace"))) for f in files)
 
 
 def cmd_measure(a):
+    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, write a snapshot."""
     repo = repo_root(a.repo)
     d = state_dir(repo)
     data = load_issues(d)
     require_leak_scan(data, repo)
-    uvx()  # fail before any step runs
-    excludes = list(dict.fromkeys([*DEFAULT_EXCLUDES, *a.exclude]))
+    tools = tool_versions()  # fail before any step runs
+    default_excludes = ("tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
+                        ".cleanup/**")
+    excludes = list(dict.fromkeys([*default_excludes, *a.exclude]))
     files = shipped_files(repo, excludes)
     index = CodeIndex(repo, files)
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
     snap = {"label": a.label, "date": now(), "commit": head(repo), "dirty": dirty, "scope": excludes,
-            "tools": dict(TOOLS), "files": len(files), "metrics": {}, "not_measured": {}}
+            "tools": tools, "files": len(files), "metrics": {}, "not_measured": {}}
     found, metrics, not_measured, measured = run_steps(repo, files, index)
     snap["metrics"].update(metrics)
     snap["not_measured"].update(not_measured)
     snap["metrics"]["suppressions"] = count_suppressions(repo, files)
     if index.syntax_errors:
         snap["not_measured"]["parse"] = f"{len(index.syntax_errors)} files don't parse: {index.syntax_errors[:3]}"
-    mark_inside_dead_code(found)
+    vulture.mark_inside_dead_code(found)
     merge(data, found, measured)
+    retired = {"ruff": "scb-check reports complexity now"}  # sources no longer run: their open issues are dismissed
     for i in open_issues(data):
-        if i.get("source") in RETIRED_SOURCES:
-            i["status"], i["note"] = "dismissed", f"no longer checked: {RETIRED_SOURCES[i['source']]}"
-    data["tools"].update(TOOLS)
+        if i.get("source") in retired:
+            i["status"] = "dismissed"
+            i["note"] = f"no longer checked: {retired[i['source']]}"
+    data["tools"].update(tools)
     save_issues(d, data, repo)
     count_issues(snap, data, repo)
     if (d / "snapshots" / f"{a.label}.json").exists():
