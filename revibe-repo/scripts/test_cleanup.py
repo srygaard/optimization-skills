@@ -316,7 +316,8 @@ def end_to_end():
 
         def at_head() -> dict:
             commit = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout
-            return json.loads((repo / ".revibe" / commit[:12] / "metrics.json").read_text())
+            folders = list((repo / ".revibe").glob(f"*-{commit.strip()[:12]}"))
+            return json.loads((folders[0] / "metrics.json").read_text())
 
         check(cli("measure", r).returncode != 0, "measure refuses to run before the leak scan")
         p = cli("leaks", r)
@@ -387,11 +388,18 @@ def end_to_end():
         check(at_head()["metrics"]["red_flags_open"]
               == flags + 1, "report counts red flags added in review into the snapshot taken at HEAD")
         loc = at_head()["metrics"]["loc"]
+        head_commit = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+        legacy = repo / ".revibe" / head_commit[:12]  # how older versions named a commit's folder
+        legacy.mkdir()
+        (legacy / "metrics.json").write_text(json.dumps(at_head()))
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
         cli("measure", r, "--label", "baseline")
         (repo / "scratch.py").unlink()
         check(at_head()["metrics"]["loc"] == loc,
               "untracked files are not measured")
+        folders = [f.name for f in (repo / ".revibe").iterdir() if f.is_dir() and f.name != "scripts"]
+        check(not legacy.exists() and all(re.fullmatch(r"\d{10}-[0-9a-f]{12}", f) for f in folders),
+              "metrics folders are named <commit epoch>-<commit>, and an older <commit> folder is replaced")
         data = json.loads((repo / ".revibe/issues.json").read_text())
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
         check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",

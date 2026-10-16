@@ -22,8 +22,9 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 - `report.md`: a self-contained work plan another agent can execute without this skill.
 - `issues.json`: every finding with its severity (critical, high, medium, low) and status. It is the
   source of truth for the issues; the report is generated from it.
-- `<commit>/metrics.json`: the scorecard of each measured commit, so the numbers can be followed
-  across the work. Re-measuring a commit replaces its metrics.
+- `<commit time>-<commit>/metrics.json`: the scorecard of each measured commit, so the numbers can be
+  followed across the work. The commit time (Unix epoch) leads the folder name, so the folders list in
+  commit order. Re-measuring a commit replaces its metrics.
 
 **Hard rules**
 1. **Run the leak scan first; it is mandatory.** `measure` and `report` refuse to run until `leaks` has
