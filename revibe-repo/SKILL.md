@@ -19,8 +19,9 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 
 **Outputs**, both in `<repo>/.cleanup/` (it ignores itself in git, so nothing there is published):
 - `report.md`: a self-contained work plan another agent can execute without this skill.
-- `issues.json`: every finding with its severity (critical, high, medium, low) and status. It is the
-  source of truth; the report is generated from it.
+- `issues.json`: every finding with its severity (critical, high, medium, low) and status, and the
+  scorecard snapshot of each `measure --label`. It is the single source of truth; the report is
+  generated from it.
 
 **Hard rules**
 1. **Run the leak scan first; it is mandatory.** `measure` and `report` refuse to run until `leaks` has

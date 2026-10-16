@@ -134,7 +134,7 @@ def offline():
         def load(text):
             (Path(tmp) / "issues.json").write_text(text)
             try:
-                return state.load_issues(Path(tmp))
+                return state.load_issues(Path(tmp) / "issues.json")
             except SystemExit as e:
                 return str(e)
 
@@ -283,6 +283,10 @@ def end_to_end():
         secrets = build_repo(Path(tmp))
         repo = Path(tmp, "repo")
         r = str(repo)
+
+        def baseline() -> dict:
+            return json.loads((repo / ".cleanup/issues.json").read_text())["snapshots"]["baseline"]
+
         check(cli("measure", r).returncode != 0, "measure refuses to run before the leak scan")
         p = cli("leaks", r)
         check(p.returncode == 0, f"leaks runs ({p.stderr.strip()[-200:]})")
@@ -325,13 +329,13 @@ def end_to_end():
               "complex dead function -> delete it (high), don't refactor it (low)")
         check(one("red-flag", "repetition"), "duplicated block -> repetition issue")
         check(one("readiness", "DEP001", symbol="numpy", severity="high"), "undeclared numpy -> high")
-        metrics = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]
+        metrics = baseline()["metrics"]
         check(one("file-length", "long-file", file="pkg/constants.py", severity="medium")
               and metrics["files_over_1000"] == 1 and metrics["files_over_500"] == 1 and metrics["avg_file_lines"] > 0,
               "a 1001-line module -> medium 'split it' issue, counted with the average file length")
         check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
               "module-level globals -> one low issue, and a scorecard count")
-        if "pip-audit" in json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["not_measured"]:
+        if "pip-audit" in baseline()["not_measured"]:
             print("  skip pip-audit check (offline?)")
         else:
             check(one("vulnerable-dependency", "pip-audit", symbol="requests", severity="high"),
@@ -344,15 +348,15 @@ def end_to_end():
                                "rule": "shallow-module", "status": "open", "note": ""})
         ids = {i["id"] for i in data["issues"]}
         (repo / ".cleanup/issues.json").write_text(json.dumps(data))
-        flags = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["red_flags_open"]
+        flags = baseline()["metrics"]["red_flags_open"]
         cli("report", r)
-        check(json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["red_flags_open"]
+        check(baseline()["metrics"]["red_flags_open"]
               == flags + 1, "report counts red flags added in review into the snapshot taken at HEAD")
-        loc = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"]
+        loc = baseline()["metrics"]["loc"]
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
         cli("measure", r, "--label", "baseline")
         (repo / "scratch.py").unlink()
-        check(json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]["loc"] == loc,
+        check(baseline()["metrics"]["loc"] == loc,
               "untracked files are not measured")
         data = json.loads((repo / ".cleanup/issues.json").read_text())
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")

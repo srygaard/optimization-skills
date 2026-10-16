@@ -1,4 +1,4 @@
-"""`cleanup.py measure`: run the tools, merge their issues, write a snapshot."""
+"""`cleanup.py measure`: run the tools, merge their issues, record a snapshot in issues.json."""
 
 import re
 import sys
@@ -6,13 +6,10 @@ from importlib.metadata import PackageNotFoundError, version
 
 from report import print_scorecard
 from scope import CodeIndex, shipped_files
-from state import (
-    count_issues, load_issues, merge, now, open_issues, require_leak_scan, save_issues, state_dir,
-    write_snapshot,
-)
+from state import Cleanup, merge, now
 from tools import ANALYZERS, MEASURE, vulture
 from tools.base import ToolError
-from utils.git import git, head, repo_root
+from utils.git import git, head
 
 
 # --- measure ---------------------------------------------------------------------------------------
@@ -57,11 +54,11 @@ def count_suppressions(repo, files: list) -> int:
 
 
 def cmd_measure(a):
-    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, write a snapshot."""
-    repo = repo_root(a.repo)
-    d = state_dir(repo)
-    data = load_issues(d)
-    require_leak_scan(data, repo)
+    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, record a snapshot."""
+    cleanup = Cleanup(a.repo)
+    cleanup.require_leak_scan()
+    repo = cleanup.repo
+    data = cleanup.data
     tools = tool_versions()  # fail before any step runs
     default_excludes = ("tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
                         ".cleanup/**")
@@ -80,15 +77,14 @@ def cmd_measure(a):
     vulture.mark_inside_dead_code(found)
     merge(data, found, measured)
     retired = {"ruff": "scb-check reports complexity now"}  # sources no longer run: their open issues are dismissed
-    for i in open_issues(data):
+    for i in cleanup.open_issues():
         if i.get("source") in retired:
             i["status"] = "dismissed"
             i["note"] = f"no longer checked: {retired[i['source']]}"
     data["tools"].update(tools)
-    save_issues(d, data, repo)
-    count_issues(snap, data, repo)
-    if (d / "snapshots" / f"{a.label}.json").exists():
+    if a.label in data["snapshots"]:
         print(f"note: overwriting snapshot {a.label}", file=sys.stderr)
-    path = write_snapshot(d, snap)
+    data["snapshots"][a.label] = snap
+    cleanup.save()  # also counts the issues into the snapshot
     print_scorecard(snap)
-    print(f"-> {d / 'issues.json'}  ·  {path}")
+    print(f"-> {cleanup.path}")
