@@ -1,4 +1,4 @@
-"""`cleanup.py leaks`: the mandatory leak scan, over the full history once and over HEAD after that."""
+"""`cleanup.py leaks`: the mandatory leak scan, over each commit once and over the files at HEAD every time."""
 
 from pathlib import Path
 
@@ -20,8 +20,9 @@ def print_leaks(repo: Path, data: dict, found: list, scanners: str):
 
 
 def cmd_leaks(a):
-    """`cleanup.py leaks`: the leak scan, folded into issues.json. It reads the full history the first time,
-    with `--history`, or when its rules changed, and only the files at HEAD otherwise."""
+    """`cleanup.py leaks`: the leak scan, folded into issues.json. It reads every commit the first time, with
+    `--history`, when its rules changed, or when a commit it read has left the history; otherwise only the commits
+    added since. It reads the files at HEAD every time."""
     cleanup = Cleanup(a.repo)
     repo = cleanup.repo
     data = cleanup.data
@@ -32,14 +33,15 @@ def cmd_leaks(a):
     known = [i for i in data["issues"] if i["source"] == tool.name]
     result = tool.scan(repo, internal, {} if a.history else last, known)
     merge(data, result.issues, {tool.name})
-    scanned = dict(result.metrics)  # its version, by name; the rules' hash; whether it read the history
-    read_history = scanned.pop("history")
+    scanned = dict(result.metrics)  # its version, by name; the rules' hash; the tips of the history it read
+    full = scanned.pop("full")
+    commits = scanned.pop("commits")
     data["tools"][tool.name] = scanned[tool.name]
     data["leak_scan"] = {"commit": cleanup.commit, "date": now(), **scanned, "internal": internal,
-                         "history": cleanup.commit if read_history else last["history"]}  # the commit it last read
+                         "history": cleanup.commit if full else last["history"]}  # HEAD when it last read every commit
     cleanup.save()
-    scope = "full history" if read_history else "HEAD"
-    print_leaks(repo, data, result.issues, f"{tool.name} {scanned[tool.name]}, {scope}")
+    read = f"all {commits} commits" if full else f"{commits} new commit{'' if commits == 1 else 's'}"
+    print_leaks(repo, data, result.issues, f"{tool.name} {scanned[tool.name]}, {read} and HEAD")
     untracked = git(repo, "ls-files", "--others", "--exclude-standard").split()
     if untracked:
         print(f"warning: {len(untracked)} untracked files were not scanned (e.g. {untracked[0]}); "

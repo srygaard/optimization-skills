@@ -5,7 +5,7 @@
 # ///
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 
-    cleanup.py leaks   REPO [--internal R] [--history]  secrets and internal refs: all history once, then HEAD
+    cleanup.py leaks   REPO [--internal R] [--history]  secrets and internal refs: each commit once, and HEAD
     cleanup.py measure REPO [--label L] [--exclude G]  this commit's metrics + mechanical issues
     cleanup.py compare REPO [BASE] [--to REF]         before/after table and regression warnings
     cleanup.py report  REPO                           render REPO/.revibe/report.md
@@ -32,12 +32,12 @@ from report import cmd_compare, cmd_report
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("leaks", help="scan for secrets and internal refs: the full history the first time, then HEAD")
+    p = sub.add_parser("leaks", help="scan for secrets and internal refs: the commits never read, and HEAD")
     p.add_argument("repo")
     p.add_argument("--internal", action="append", default=[], metavar="REGEX",
                    help="extra internal-reference pattern (RE2); repeatable")
     p.add_argument("--history", action="store_true",
-                   help="read the full history again, e.g. after rewriting it (new rules do this anyway)")
+                   help="read every commit again (new rules, or a commit read before leaving the history, do this anyway)")
     p = sub.add_parser("measure", help="this commit's metrics and mechanical issues")
     p.add_argument("repo")
     p.add_argument("--label", default="", help="a name for this commit's metrics, e.g. baseline")

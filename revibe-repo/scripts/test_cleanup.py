@@ -185,7 +185,8 @@ def build_repo(root: Path) -> dict:
     alnum = string.ascii_letters + string.digits
     secrets = {"github": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
                "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34)),
-               "allowed": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}
+               "allowed": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
+               "between": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}  # committed after a scan
     # split so this file scans clean
     sbatch = "#SB" + "ATCH"
     account = "rrg" + "-someprof"
@@ -395,6 +396,11 @@ def end_to_end():
         subprocess.run(["git", "-C", r, "rm", "-q", "config.py"], check=True)
         subprocess.run(["git", "-C", r, "add", "pkg/config.py"], check=True)
         subprocess.run(["git", "-C", r, "commit", "-qam", "delete dead code"], check=True)
+        (repo / "notes.py").write_text(f'KEY = "{secrets["between"]}"\n')
+        subprocess.run(["git", "-C", r, "add", "notes.py"], check=True)
+        subprocess.run(["git", "-C", r, "commit", "-qm", "add a key"], check=True)
+        subprocess.run(["git", "-C", r, "rm", "-q", "notes.py"], check=True)
+        subprocess.run(["git", "-C", r, "commit", "-qm", "and remove it"], check=True)
         check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
         cli("leaks", r)
         cli("measure", r, "--label", "after")
@@ -406,14 +412,17 @@ def end_to_end():
         check(next(i for i in data["issues"] if i["id"] == leak["id"])["status"] == "open",
               "the repo's own .betterleaksignore doesn't hide a secret from the audit")
         rescanned = {i["id"]: i for i in data["issues"] if i["category"] in ("leak", "internal-ref")}
-        check(data["leak_scan"]["history"] == history_commit and set(rescanned) == scanned,
-              "a later scan reads HEAD only, and keeps the IDs the history scan gave")
+        new = [rescanned[i] for i in set(rescanned) - scanned]
+        check(data["leak_scan"]["history"] == history_commit and scanned <= set(rescanned),
+              "a later scan reads only the new commits, and keeps the IDs earlier scans gave")
+        check([(i["file"], i["severity"], i["evidence"]["at_head"]) for i in new] == [("notes.py", "critical", False)],
+              "a secret committed and removed between two scans is found: critical, only in history")
         moved = rescanned[leak["id"]]
         check(moved["evidence"]["at_head"] and (moved["file"], moved["line"]) == ("pkg/config.py", 3),
-              "a secret moved to another file, lower down, keeps its ID when HEAD is scanned")
+              "a secret moved to another file, lower down, keeps its ID")
         token = next(i for i in rescanned.values() if i["rule"] == "huggingface-access-token")
         check(token["status"] == "open" and token["severity"] == "critical" and not token["evidence"]["at_head"],
-              "a secret only in the history stays open and critical when HEAD is scanned")
+              "a secret only in the commits read before stays open and critical")
         mila = next(i for i in rescanned.values() if i["rule"] == "internal-mila-path")
         slurm = next(i for i in rescanned.values() if i["rule"] == "internal-slurm-account")
         check(mila["status"] == "open" and mila["severity"] == "low" and slurm["severity"] == "high",
@@ -430,7 +439,12 @@ def end_to_end():
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .revibe/scripts/ runs on its own")
         cli("leaks", r, "--history")
         check(json.loads((repo / ".revibe/issues.json").read_text())["leak_scan"]["history"] != history_commit,
-              "leaks --history reads the full history again")
+              "leaks --history reads every commit again")
+        subprocess.run(["git", "-C", r, "commit", "-q", "--amend", "-m", "and remove it (amended)"], check=True)
+        cli("leaks", r)
+        amended = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        check(json.loads((repo / ".revibe/issues.json").read_text())["leak_scan"]["history"] == amended,
+              "a commit read before that has left the history (amended) makes the next scan read every commit")
         check(not any(f.name == "__pycache__" for f in (repo / ".revibe").rglob("*")) and
               not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .revibe/ or the skill folder")
         files = [f.read_text(errors="replace") for f in (repo / ".revibe").rglob("*") if f.is_file()]
