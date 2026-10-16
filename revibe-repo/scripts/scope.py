@@ -2,6 +2,8 @@
 reads."""
 
 import ast
+import io
+import tokenize
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import NamedTuple
@@ -44,6 +46,26 @@ def module_globals(tree: ast.Module) -> list:
     return sorted(n for n in names if not (n.startswith("__") and n.endswith("__")))
 
 
+def code_lines(text: str, tree: ast.Module) -> int:
+    """How many lines hold code: not blank or only a comment, and not part of a docstring or an import."""
+    not_code = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+    lines = {n for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in not_code
+             for n in range(t.start[0], t.end[0] + 1)}
+    return len(lines - docstring_and_import_lines(tree))
+
+
+def docstring_and_import_lines(tree: ast.Module) -> set:
+    """The lines of a module's imports, and of its module, class and function docstrings."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            out.update(range(node.lineno, node.end_lineno + 1))
+        elif isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                ast.get_docstring(node, clean=False) is not None:
+            out.update(range(node.body[0].lineno, node.body[0].end_lineno + 1))
+    return out
+
+
 class Def(NamedTuple):
     """A function or class: its span (decorators included), qualified name, `def` line and kind."""
 
@@ -55,24 +77,24 @@ class Def(NamedTuple):
 
 
 class Scope:
-    """What a measure step reads: the repo, the files in scope, and for each file its functions and classes
-    (a `Def` each), its length and its module-level globals."""
+    """What a measure step reads: the repo, the files in scope, and for each file that parses its functions and
+    classes (a `Def` each), its length in code lines and its module-level globals."""
 
     def __init__(self, repo: Path, files: list):
         self.repo = repo
         self.files = files
         self.defs = {}
-        self.lines = {}
+        self.code_lines = {}
         self.globals = {}
         self.syntax_errors = []
         for rel in files:
             text = (repo / rel).read_text(errors="replace")
-            self.lines[rel] = len(text.splitlines())
             try:
                 tree = ast.parse(text)
             except SyntaxError:
                 self.syntax_errors.append(rel)
                 continue
+            self.code_lines[rel] = code_lines(text, tree)
             self.globals[rel] = module_globals(tree)
             defs = self.defs[rel] = []
 

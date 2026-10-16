@@ -42,8 +42,8 @@ MEASURE: tuple[Step, ...] = (
     FileLength(
         severity={"long-file": "medium"},
         settings={
-            "long_file_lines": 1000,  # source files longer than this should be split
-            "warn_file_lines": 500,  # files longer than this are counted
+            "long_file_lines": 1000,  # source files with more code lines than this should be split
+            "warn_file_lines": 500,  # files with more code lines than this are counted
         },
     ),
     ModuleGlobals(severity={"globals": "low"}),
