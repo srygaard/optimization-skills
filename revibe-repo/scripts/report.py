@@ -43,9 +43,9 @@ def print_scorecard(snap: dict):
     print(f"scorecard  {column(snap)}{at}{' (dirty)' if snap['dirty'] else ''}  "
           f"release: {snap['release_status'].upper()}")
     for label, value, ref in scorecard([snap]):
-        print(f"  {label:<22}{value:>10}" + (f"   (paper, human / agent code: {ref})" if ref else ""))
+        print(f"  {label:<24}{value:>10}" + (f"   (paper, human / agent code: {ref})" if ref else ""))
     o = snap["open_issues"]
-    print("  Open issues           " + " · ".join(f"{o[s.name]} {s.name}" for s in Severity))
+    print(f"  {'Open issues':<24}" + " · ".join(f"{o[s.name]} {s.name}" for s in Severity))
     for tool, why in snap["not_measured"].items():
         print(f"  not measured: {tool} ({why[:100]})")
 
@@ -66,9 +66,9 @@ def cmd_compare(a):
         b = base["open_issues"][s.name]
         n = after["open_issues"][s.name]
         rows.append([f"open {s.name}", b, n, f"{n - b:+}", ""])
-    print(f"{'metric':<22}{column(base):>14}{column(after):>14}{'delta':>10}")
+    print(f"{'metric':<24}{column(base):>14}{column(after):>14}{'delta':>10}")
     for label, b, n, delta, _ in rows:
-        print(f"{label:<22}{b:>14}{n:>14}{delta:>10}")
+        print(f"{label:<24}{b:>14}{n:>14}{delta:>10}")
     for w in comparison_warnings(base, after):
         print(f"warning: {w}")
 

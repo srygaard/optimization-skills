@@ -90,7 +90,7 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
 | **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, red flags you add | Medium |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
@@ -146,7 +146,7 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 | Dead code LOC | vulture | unused functions and classes not named anywhere else |
 | Red flags open, Leaks open | issues.json | counts of open issues |
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
-| Avg file length, Files > 500 / > 1000 lines | line count | lines per source file. A file over 1000 lines gets a medium issue: split it into modules that each own one concept |
+| Avg code lines per file, Files > 500 / > 1000 code lines | `tokenize`, `ast` | code lines per source file: comments, docstrings, imports and blank lines don't count, so documenting code never makes a file "too long". A file over 1000 gets a medium issue: split it into modules that each own one concept. A file that doesn't parse has no count (it is listed under not measured) |
 | Globals | `ast` | names a module binds outside its functions and classes, constants included, plus names declared `global`. One low issue holds the count and the files with the most |
 
 - **Reference ranges** from SlopCodeBench (arXiv 2603.24755): maintained human Python repos average
@@ -154,8 +154,8 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
   scb-check 0.2.0 measures Violation % and Clone Ratio differently from the paper, so those two have no
   reference.
 - **Ratios can rise when you delete clean code.** `compare` warns on absolute amounts instead: verbosity-
-  flagged LOC, mass in high-CC functions, suppressions, files over 1000 lines, module-level globals. A
-  warning after a refactor means it added slop.
+  flagged LOC, mass in high-CC functions, suppressions, files over 1000 code lines, module-level globals.
+  A warning after a refactor means it added slop.
 - **Erosion and verbosity predict maintenance cost, not bugs** (paper, Appendix G). Net LOC is the
   simplest honest signal: most cleanup commits should delete more than they add.
 - **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues.

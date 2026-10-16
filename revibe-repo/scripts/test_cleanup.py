@@ -141,6 +141,21 @@ def offline():
         check(vulture.runtime_lines(index, "mod.py", 4) == {5} and vulture.runtime_lines(index, "mod.py", 8) == {12},
               "coverage counts function and method bodies, not def or class-body lines that run on import")
 
+    text = ('"""Module docstring,\n\nover three lines."""\n'
+            "import os\n"
+            "from pathlib import (\n    Path,\n)\n"
+            "\n"
+            "# a comment\n"
+            "X = 1  # code with a comment\n"
+            'HELP = """\n# not a comment: this string is code\n"""\n'
+            "\n\n"
+            "def f(a):\n"
+            '    """Docstring."""\n'
+            "    import json\n"
+            "    return json.dumps(a)\n")
+    check(scope.code_lines(text, ast.parse(text)) == 6,
+          "file length counts code lines: not blank lines, comments, docstrings or imports")
+
     module = ("A = 1\nx: int = 2\n__all__ = []\nif True:\n    B = 3\nfor i in range(3):\n    pass\n"
               "[y for y in range(2)]\ndef f():\n    global G\n    G = 1\n    local = 2\nclass C:\n    attr = 1\n")
     check(scope.module_globals(ast.parse(module)) == ["A", "B", "G", "i", "x"],
@@ -349,8 +364,9 @@ def end_to_end():
         check(one("readiness", "DEP001", symbol="numpy", severity="high"), "undeclared numpy -> high")
         metrics = at_head()["metrics"]
         check(one("file-length", "long-file", file="pkg/constants.py", severity="medium")
-              and metrics["files_over_1000"] == 1 and metrics["files_over_500"] == 1 and metrics["avg_file_lines"] > 0,
-              "a 1001-line module -> medium 'split it' issue, counted with the average file length")
+              and metrics["files_over_1000_code_lines"] == 1 and metrics["files_over_500_code_lines"] == 1
+              and metrics["avg_code_lines"] > 0,
+              "a module of 1001 code lines -> medium 'split it' issue, counted with the average file length")
         check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
               "module-level globals -> one low issue, and a scorecard count")
         if "pip-audit" in at_head()["not_measured"]:
