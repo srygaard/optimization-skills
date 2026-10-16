@@ -9,19 +9,21 @@ description: >-
   missing LICENSE or README, undeclared or vulnerable dependencies
   (deptry, pip-audit), dead code (vulture), cyclomatic complexity, duplication, code sloppiness
   metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
-  from Ousterhout's "A Philosophy of Software Design". Produces .cleanup/report.md, which another
-  agent can work from, and .cleanup/issues.json, with every finding and its severity.
+  from Ousterhout's "A Philosophy of Software Design". Produces .revibe/report.md, which another
+  agent can work from, .revibe/issues.json, with every finding and its severity, and the metrics of
+  each measured commit, so progress is tracked across the work.
 ---
 
 # Revibe a repo before open-sourcing
 
 A router. One script measures, tracks and reports; depth lives in `references/`.
 
-**Outputs**, both in `<repo>/.cleanup/` (it ignores itself in git, so nothing there is published):
+**Outputs**, all in `<repo>/.revibe/` (it ignores itself in git, so nothing there is published):
 - `report.md`: a self-contained work plan another agent can execute without this skill.
-- `issues.json`: every finding with its severity (critical, high, medium, low) and status, and the
-  scorecard snapshot of each `measure --label`. It is the single source of truth; the report is
-  generated from it.
+- `issues.json`: every finding with its severity (critical, high, medium, low) and status. It is the
+  source of truth for the issues; the report is generated from it.
+- `<commit>/metrics.json`: the scorecard of each measured commit, so the numbers can be followed
+  across the work. Re-measuring a commit replaces its metrics.
 
 **Hard rules**
 1. **Run the leak scan first; it is mandatory.** `measure` and `report` refuse to run until `leaks` has
@@ -41,13 +43,13 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 ```bash
 S=<this skill>/scripts
 $S/cleanup.py leaks   <repo> [--internal REGEX]   # 1. full-history secret scan (mandatory)
-$S/cleanup.py measure <repo> --label baseline      # 2. scorecard + mechanical issues
+$S/cleanup.py measure <repo> --label baseline      # 2. this commit's scorecard + mechanical issues
 #                                                    3. review issues.json (section 3)
-$S/cleanup.py report  <repo>                       # 4. render .cleanup/report.md
+$S/cleanup.py report  <repo>                       # 4. render .revibe/report.md
 #                                                    5. the user picks a phase, or hands the report on
 #                                                    6. fix loop: safety net, one issue per commit
-$S/cleanup.py leaks <repo> && $S/cleanup.py measure <repo> --label after-high   # 7. after the phase
-$S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
+$S/cleanup.py leaks <repo> && $S/cleanup.py measure <repo>   # 7. after each commit
+$S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline against this commit
 ```
 
 - The safety net goes under `tests/`, in its own commit, before the first refactor.
@@ -57,7 +59,11 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 - `--internal REGEX` adds a repo-specific internal pattern (a lab hostname, `/checkpoint/`). Patterns
   are remembered for later scans.
 - `--exclude GLOB` on `measure` leaves paths out of the metrics. Tests and docs are excluded by default,
-  so adding a safety net doesn't move the numbers. Keep the same excludes for every snapshot.
+  so adding a safety net doesn't move the numbers. Keep the same excludes for every commit.
+- `--label NAME` names a commit's metrics (`baseline` is the one `compare` and the report start from;
+  without it, the first measured commit). `compare` takes a label, a commit or any git ref, and by
+  default compares the baseline with the latest measured commit. The report's scorecard shows the
+  baseline and the last six commits measured after it.
 
 **While refactoring** (report.md repeats these):
 - If a file holds many pure functions, consider organizing them into classes.
@@ -100,7 +106,7 @@ published results (freeze or tag them).
 
 ## 3. Reviewing issues.json (step 3)
 
-Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reason, never a 1–10 score.
+Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reason, never a 1–10 score.
 
 - **Dead code:** vulture is guessing (60% confidence). Confirm nothing names the symbol: yaml
   `_target_`/`target:`, registries, `getattr`, notebooks, shell scripts. `measure` already dismisses
@@ -119,7 +125,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
   design (an override like `model.train = disabled_train`), not worth it, or a rotated key that stays in
   the local history are all valid. `fixed` only sticks once the tools stop detecting the issue:
   re-measuring reopens a fixed issue they still see. Your edits
-  survive re-runs; `grep <ID> .cleanup/issues.json` shows one issue per line.
+  survive re-runs; `grep <ID> .revibe/issues.json` shows one issue per line.
 - **Bugs found on the way** get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity`
   and a `summary`; the rest is optional) and their own commit, never inside a refactor.
 - **Typos stop the script:** every command checks issues.json first and names any issue with an unknown
@@ -178,9 +184,9 @@ unless the SHA-256 matches the pinned value, and caches it in `~/.cache/revibe-r
   builds a throwaway repo with one known instance of each finding and checks all of them, including
   that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
-- `report` copies `cleanup.py`, its modules and `tools/` (which holds the leak rules,
-  `betterleaks.toml`) into `.cleanup/`, so another agent can re-measure with `.cleanup/cleanup.py`
-  without this skill.
+- `report` copies `cleanup.py`, its modules, `tools/` (which holds the leak rules, `betterleaks.toml`)
+  and `utils/` into `.revibe/scripts/`, so another agent can re-measure with
+  `.revibe/scripts/cleanup.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).

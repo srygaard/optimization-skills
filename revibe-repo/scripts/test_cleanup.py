@@ -298,15 +298,16 @@ def end_to_end():
         repo = Path(tmp, "repo")
         r = str(repo)
 
-        def baseline() -> dict:
-            return json.loads((repo / ".cleanup/issues.json").read_text())["snapshots"]["baseline"]
+        def at_head() -> dict:
+            commit = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+            return json.loads((repo / ".revibe" / commit[:12] / "metrics.json").read_text())
 
         check(cli("measure", r).returncode != 0, "measure refuses to run before the leak scan")
         p = cli("leaks", r)
         check(p.returncode == 0, f"leaks runs ({p.stderr.strip()[-200:]})")
         p = cli("measure", r, "--label", "baseline")
         check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
+        data = json.loads((repo / ".revibe/issues.json").read_text())
         by = {}
         for i in data["issues"]:
             by.setdefault((i["category"], i["rule"]), []).append(i)
@@ -343,13 +344,13 @@ def end_to_end():
               "complex dead function -> delete it (high), don't refactor it (low)")
         check(one("red-flag", "repetition"), "duplicated block -> repetition issue")
         check(one("readiness", "DEP001", symbol="numpy", severity="high"), "undeclared numpy -> high")
-        metrics = baseline()["metrics"]
+        metrics = at_head()["metrics"]
         check(one("file-length", "long-file", file="pkg/constants.py", severity="medium")
               and metrics["files_over_1000"] == 1 and metrics["files_over_500"] == 1 and metrics["avg_file_lines"] > 0,
               "a 1001-line module -> medium 'split it' issue, counted with the average file length")
         check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
               "module-level globals -> one low issue, and a scorecard count")
-        if "pip-audit" in baseline()["not_measured"]:
+        if "pip-audit" in at_head()["not_measured"]:
             print("  skip pip-audit check (offline?)")
         else:
             check(one("vulnerable-dependency", "pip-audit", symbol="requests", severity="high"),
@@ -361,18 +362,18 @@ def end_to_end():
         data["issues"].append({**route, "id": "RF-A1", "source": "agent", "category": "red-flag",
                                "rule": "shallow-module", "status": "open", "note": ""})
         ids = {i["id"] for i in data["issues"]}
-        (repo / ".cleanup/issues.json").write_text(json.dumps(data))
-        flags = baseline()["metrics"]["red_flags_open"]
+        (repo / ".revibe/issues.json").write_text(json.dumps(data))
+        flags = at_head()["metrics"]["red_flags_open"]
         cli("report", r)
-        check(baseline()["metrics"]["red_flags_open"]
+        check(at_head()["metrics"]["red_flags_open"]
               == flags + 1, "report counts red flags added in review into the snapshot taken at HEAD")
-        loc = baseline()["metrics"]["loc"]
+        loc = at_head()["metrics"]["loc"]
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
         cli("measure", r, "--label", "baseline")
         (repo / "scratch.py").unlink()
-        check(baseline()["metrics"]["loc"] == loc,
+        check(at_head()["metrics"]["loc"] == loc,
               "untracked files are not measured")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
+        data = json.loads((repo / ".revibe/issues.json").read_text())
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
         check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",
               "agent edits survive a re-run")
@@ -390,26 +391,28 @@ def end_to_end():
         check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
         cli("leaks", r)
         cli("measure", r, "--label", "after")
-        data = json.loads((repo / ".cleanup/issues.json").read_text())
+        data = json.loads((repo / ".revibe/issues.json").read_text())
         check(any(i["symbol"] == "unused_helper" and i["status"] == "fixed" for i in data["issues"]),
               "deleted dead code -> fixed")
+        check(len(list((repo / ".revibe").glob("*/metrics.json"))) == 2,
+              "each measured commit keeps its metrics in its own folder; re-measuring one replaces them")
         check(next(i for i in data["issues"] if i["id"] == leak["id"])["status"] == "open",
               "the repo's own .betterleaksignore doesn't hide a secret from the audit")
         p = cli("compare", r, "baseline")
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
         p = cli("report", r)
-        report = (repo / ".cleanup/report.md").read_text()
+        report = (repo / ".revibe/report.md").read_text()
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
         check("## Severity rules" in report and "- **critical:** credential" in report,
               "report ends with the severity rules")
-        p = subprocess.run([sys.executable, str(repo / ".cleanup/cleanup.py"), "compare", r, "baseline"],
+        p = subprocess.run([sys.executable, str(repo / ".revibe/scripts/cleanup.py"), "compare", r, "baseline"],
                            capture_output=True, text=True)
-        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .cleanup/ runs on its own")
-        check(not any(f.name == "__pycache__" for f in (repo / ".cleanup").rglob("*")) and
-              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .cleanup/ or the skill folder")
-        files = [f.read_text(errors="replace") for f in (repo / ".cleanup").rglob("*") if f.is_file()]
+        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .revibe/scripts/ runs on its own")
+        check(not any(f.name == "__pycache__" for f in (repo / ".revibe").rglob("*")) and
+              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .revibe/ or the skill folder")
+        files = [f.read_text(errors="replace") for f in (repo / ".revibe").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
-        check(not leaked, f"no plaintext secret in output or .cleanup/ {leaked or ''}")
+        check(not leaked, f"no plaintext secret in output or .revibe/ {leaked or ''}")
 
 
 def main():

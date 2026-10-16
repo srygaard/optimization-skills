@@ -10,8 +10,8 @@ from tools import policies, scorecard_metrics
 # --- scorecard -------------------------------------------------------------------------------------
 
 def scorecard(snaps: list) -> list:
-    """Rows of [metric, value per snapshot, delta (with two snapshots), reference] for every metric
-    that any of the snapshots measured: the measure steps' in step order, then the open-issue counts.
+    """Rows of [metric, value per snapshot, delta (last minus first, with two or more), reference] for every
+    metric that any of the snapshots measured: the measure steps' in step order, then the open-issue counts.
     measure, compare and report all print these rows."""
     rows = []
     for m in (*scorecard_metrics(), *Cleanup.metrics):
@@ -19,16 +19,27 @@ def scorecard(snaps: list) -> list:
         if not m.label or all(v is None for v in vals):
             continue
         row = [m.label, *("-" if v is None else m.form.format(v) for v in vals)]
-        if len(snaps) == 2:
-            b, n = vals
-            row.append("" if b is None or n is None else f"{n - b:+,}" if isinstance(b, int) else f"{n - b:+.3f}")
+        if len(snaps) >= 2:
+            row.append(change(vals[0], vals[-1]))
         ref = m.reference
         rows.append(row + [f"{ref[0]} / {ref[1]}" if ref else ""])
     return rows
 
 
+def change(before, after) -> str:
+    """How a metric moved between two snapshots, signed; "" when either didn't measure it."""
+    if before is None or after is None:
+        return ""
+    return f"{after - before:+,}" if isinstance(before, int) else f"{after - before:+.3f}"
+
+
+def column(snap: dict) -> str:
+    """What a snapshot is called in a table: its label, or its commit."""
+    return snap.get("label") or snap["commit"][:8]
+
+
 def print_scorecard(snap: dict):
-    print(f"scorecard  {snap['label']}  @ {snap['commit'][:8]}{' (dirty)' if snap['dirty'] else ''}  "
+    print(f"scorecard  {column(snap)}  @ {snap['commit'][:8]}{' (dirty)' if snap['dirty'] else ''}  "
           f"release: {snap['release_status'].upper()}")
     for label, value, ref in scorecard([snap]):
         print(f"  {label:<22}{value:>10}" + (f"   (paper, human / agent code: {ref})" if ref else ""))
@@ -41,19 +52,20 @@ def print_scorecard(snap: dict):
 # --- compare ---------------------------------------------------------------------------------------
 
 def cmd_compare(a):
-    """`cleanup.py compare`: two snapshots side by side, with the regressions between them."""
+    """`cleanup.py compare`: two measured commits side by side, with the regressions between them. By default
+    the baseline and the latest."""
     cleanup = Cleanup(a.repo)
-    cleanup.save()  # counts issues edited by hand into the snapshot taken at HEAD
-    base = cleanup.snapshot(a.base)
-    after = cleanup.snapshot(a.to) if a.to else cleanup.latest_snapshot(exclude=a.base)
-    if after is None:
-        raise SystemExit("nothing to compare: run `cleanup.py measure --label <after>` first")
+    cleanup.save()  # counts issues edited by hand into HEAD's metrics
+    base = cleanup.snapshot(a.base) if a.base else cleanup.baseline()
+    after = cleanup.snapshot(a.to) if a.to else (cleanup.snapshots() or [None])[-1]
+    if base is None or after is None or after["commit"] == base["commit"]:
+        raise SystemExit("nothing to compare: commit, then run `cleanup.py measure` on the new commit")
     rows = scorecard([base, after])
     for s in Severity:
         b = base["open_issues"][s.name]
         n = after["open_issues"][s.name]
         rows.append([f"open {s.name}", b, n, f"{n - b:+}", ""])
-    print(f"{'metric':<22}{base['label']:>14}{after['label']:>14}{'delta':>10}")
+    print(f"{'metric':<22}{column(base):>14}{column(after):>14}{'delta':>10}")
     for label, b, n, delta, _ in rows:
         print(f"{label:<22}{b:>14}{n:>14}{delta:>10}")
     for w in comparison_warnings(base, after):
@@ -82,10 +94,10 @@ HOW_TO = """\
 2. Critical leaks: the user must revoke/rotate the key first. Never print, echo or `cat` a secret; the previews here are enough.
 3. Safety net before refactoring, in its own commit under `tests/` (outside the metrics): a test that imports every module, `--help` for each entry point, and a characterization test (small synthetic inputs, pinned output) for each function you change. The tests must run in the project's real environment; if it isn't available (e.g. no torch, no GPU), ask the user before refactoring, and don't commit stubs.
 4. One issue per commit, with a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit. Delete dead code before refactoring: issues marked "Inside dead-code candidate" go away with it.
-5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity` and a `summary`; the other fields are optional) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
+5. Record each outcome in `.revibe/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity` and a `summary`; the other fields are optional) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
 6. No nitpicks: only change what makes the code meaningfully easier to understand, use or change. A refactor that adds lines needs a reason. Never pack code to save lines (`a, b = f(), g()`, several statements on one line): LOC should fall because code is gone.
 7. While refactoring: if a file holds many pure functions, consider organizing them into classes; if a function returns a tuple, consider a named tuple; give each function or method you touch a one-sentence docstring on its purpose if it has none; don't introduce new globals (keep a constant next to its only user, pass state as arguments); and instead of a catch-all `common.py` or `utils.py`, put helpers in a `utils/` package with one module per purpose (`utils/paths.py`, `utils/timing.py`, `utils/git.py`), never named after a standard-library module such as `time.py` or `json.py`, which it would shadow; and use `pathlib` (`root / "data" / name`, `.read_text()`, `.exists()`) instead of string paths built with `os.path.join` or f-strings.
-8. Re-measure when you stop (the label is any name): `.cleanup/cleanup.py leaks .`, `.cleanup/cleanup.py measure . --label after-<what>`, `.cleanup/cleanup.py compare . baseline`, `.cleanup/cleanup.py report .` (needs uv)."""
+8. Re-measure after each commit, so `.revibe/<commit>/metrics.json` tracks the work: `.revibe/scripts/cleanup.py leaks .`, `.revibe/scripts/cleanup.py measure .`, then `.revibe/scripts/cleanup.py compare .` (the baseline against this commit) and `.revibe/scripts/cleanup.py report .` (needs uv)."""
 
 def cell(text) -> str:
     return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
@@ -114,30 +126,32 @@ def report_header(cleanup: Cleanup) -> list:
     return [f"# Cleanup report: {cleanup.repo.name}", "",
             f"Commit `{data['commit'][:8]}` · generated {data['generated'][:10]} · "
             f"release status: **{status}**{reason}{blocking}", "",
-            "Source of truth: `.cleanup/issues.json`. This file is generated by `cleanup.py report`.", "",
+            "Source of truth: `.revibe/issues.json`, and `.revibe/<commit>/metrics.json` for each measured commit. "
+            "This file is generated by `cleanup.py report`.", "",
             "## How to work this report", "", HOW_TO, "", "## Scorecard", ""]
 
 
 def report_columns(cleanup: Cleanup) -> list:
-    """The snapshots the scorecard shows: the baseline and the latest, or the one there is."""
-    latest = cleanup.latest_snapshot()
-    base = cleanup.data["snapshots"].get("baseline")
+    """The snapshots the scorecard shows, oldest first: the baseline and the last six commits measured after
+    it, so the table tracks the work."""
+    base = cleanup.baseline()
     if base is None:
-        return [latest] if latest else []
-    return [base] if latest["label"] == base["label"] else [base, latest]
+        return []
+    return [base, *[s for s in cleanup.snapshots() if s["date"] > base["date"]][-6:]]
 
 
 def scorecard_section(cols: list) -> list:
-    """The scorecard table, with deltas and regression warnings when it compares two snapshots."""
+    """The scorecard table, with deltas and regression warnings (baseline against latest) when it has several
+    snapshots."""
     if not cols:
         return ["No snapshot yet: run `cleanup.py measure`."]
-    delta = ["Δ"] if len(cols) == 2 else []
-    lines = md_table(["metric", *(s["label"] for s in cols), *delta, "reference (paper: human / agent)"],
+    delta = ["Δ"] if len(cols) >= 2 else []
+    lines = md_table(["metric", *(column(s) for s in cols), *delta, "reference (paper: human / agent)"],
                      scorecard(cols))
     if not_measured := cols[-1].get("not_measured"):
         lines += ["", "Not measured: " + "; ".join(f"{k} ({v[:80]})" for k, v in not_measured.items())]
-    if len(cols) == 2:
-        lines += [f"\n> warning: {w}" for w in comparison_warnings(cols[0], cols[1])]
+    if len(cols) >= 2:
+        lines += [f"\n> warning: {w}" for w in comparison_warnings(cols[0], cols[-1])]
     return lines
 
 
@@ -191,20 +205,17 @@ def render_report(cleanup: Cleanup) -> str:
 
 
 def cmd_report(a):
-    """`cleanup.py report`: render .cleanup/report.md from issues.json, and copy the scripts beside it."""
+    """`cleanup.py report`: render .revibe/report.md, and copy the scripts to .revibe/scripts/."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
     cleanup.save()  # refreshes the release status and the snapshot taken at HEAD
     d = cleanup.dir
     (d / "report.md").write_text(render_report(cleanup))
     scripts = Path(__file__).resolve().parent  # cleanup.py, the modules it imports, tools/ and utils/
-    if scripts != d.resolve():  # lets another agent re-measure without the skill
-        for f in scripts.glob("*.py"):
-            if not f.name.startswith("test_"):
-                shutil.copy2(f, d)
-        for package in ("tools", "utils"):
-            shutil.rmtree(d / package, ignore_errors=True)  # a module renamed since the last copy must not linger
-            shutil.copytree(scripts / package, d / package, ignore=shutil.ignore_patterns("__pycache__"))
+    copy = d / "scripts"
+    if scripts != copy.resolve():  # lets another agent re-measure without the skill
+        shutil.rmtree(copy, ignore_errors=True)  # a module renamed since the last copy must not linger
+        shutil.copytree(scripts, copy, ignore=shutil.ignore_patterns("__pycache__", "test_*.py", ".*"))
     counts = " · ".join(f"{len(cleanup.open_issues(s))} {s.name}" for s in Severity)
     print(f"release: {cleanup.data['release_status'].upper()}  ·  open {counts}")
     print(f"-> {d / 'report.md'}")
