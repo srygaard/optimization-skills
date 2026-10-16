@@ -208,11 +208,14 @@ def offline():
 def build_repo(root: Path) -> dict:
     """One known instance of each finding, in root/repo. Returns the fake secrets."""
     rnd = random.Random(1234)
-    letters, alnum = string.ascii_letters, string.ascii_letters + string.digits
+    letters = string.ascii_letters
+    alnum = string.ascii_letters + string.digits
     secrets = {"github": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36)),
                "hf": "hf" + "_" + "".join(rnd.choice(letters) for _ in range(34)),
                "allowed": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}
-    sbatch, mila = "#SB" + "ATCH", "/net" + "work/scratch/s/student/data"  # split so this file scans clean
+    # split so this file scans clean
+    sbatch = "#SB" + "ATCH"
+    mila = "/net" + "work/scratch/s/student/data"
 
     repo = root / "repo"
     repo.mkdir()
@@ -399,7 +402,8 @@ def end_to_end():
               "open issues from a retired tool are dismissed")
 
         model = (repo / "pkg/model.py").read_text()
-        start, end = model.index("def unused_helper"), model.index("def route")
+        start = model.index("def unused_helper")
+        end = model.index("def route")
         (repo / "pkg/model.py").write_text(model[:start] + model[end:])
         leak = next(i for i in data["issues"] if i["category"] == "leak" and i["file"] == "config.py")
         (repo / ".betterleaksignore").write_text("\n".join(leak["evidence"]["fingerprints"]) + "\n")

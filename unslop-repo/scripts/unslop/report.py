@@ -85,7 +85,8 @@ def comparison_warnings(base: dict, after: dict) -> list:
     for key, label in (("verbosity_flagged_loc", "verbosity-flagged LOC"),
                        ("high_cc_mass", "mass in functions with CC > 10"), ("suppressions", "suppressions"),
                        ("files_over_1000", f"files over {LONG_FILE_LINES} lines")):
-        b, n = base["metrics"].get(key), after["metrics"].get(key)
+        b = base["metrics"].get(key)
+        n = after["metrics"].get(key)
         if b is not None and n is not None and n > b:
             out.append(f"{label} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings")
     if base["tools"] != after["tools"]:
@@ -158,7 +159,8 @@ def render_report(repo: Path, data: dict, d: Path) -> str:
             lines.append("Nothing open.")
             continue
         done = phase != "Low"  # Low issues are optional: no done-when column
-        rows, prev = [], {}
+        rows = []
+        prev = {}
         for i in items:
             same = {k: "same as above" if i[k] and i[k] == prev.get(k) else i[k] for k in ("fix", "done_when")}
             rows.append([i["id"], i["severity"], where(i), i["summary"], same["fix"],

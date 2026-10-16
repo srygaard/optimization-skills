@@ -58,7 +58,8 @@ def deptry_deps(repo, files, index) -> Result:
         violations = json.loads(report.read_text())
     out = []
     for v in violations:
-        code, module = v["error"]["code"], v["module"]
+        code = v["error"]["code"]
+        module = v["module"]
         file = rel(repo, v["location"]["file"])
         fixes = {"DEP001": f"Declare the package that provides `{module}` as a dependency.",
                  "DEP002": f"Remove `{module}` from the dependencies if it is really unused.",

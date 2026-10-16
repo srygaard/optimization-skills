@@ -36,7 +36,8 @@ def check_issues(data, path: Path):
     report and the release gate. Missing optional fields get their defaults."""
     if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list):
         die(f"{path} must be an object with an \"issues\" list")
-    problems, seen = [], set()
+    problems = []
+    seen = set()
     for n, i in enumerate(data["issues"], 1):
         ident = i.get("id") or f"issue #{n}"
         if missing := [k for k in ("id", "category", "severity", "summary") if not i.get(k)]:
@@ -128,7 +129,8 @@ def merge(data: dict, found: list, sources: set):
         if ident in seen:
             continue
         seen.add(ident)
-        old, prev = by_id.get(ident), defaults.get(ident)
+        old = by_id.get(ident)
+        prev = defaults.get(ident)
         defaults[ident] = {k: _digest(new[k]) for k in AGENT_FIELDS}
         if old is None:
             data["issues"].append(new)

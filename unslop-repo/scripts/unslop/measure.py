@@ -25,7 +25,10 @@ STEPS = (("scb-check", scb_check), ("vulture", vulture_dead),
 def run_steps(repo, files, index, steps=None) -> tuple:
     """Run the measure steps: (issues, metrics, not_measured, measured). A step that fails or has nothing
     to read is not measured, and one broken step doesn't lose the others' results."""
-    found, metrics, not_measured, measured = [], {}, {}, set()
+    found = []
+    metrics = {}
+    not_measured = {}
+    measured = set()
     for name, step in steps or STEPS:
         try:
             r = step(repo, files, index)
