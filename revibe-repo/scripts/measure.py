@@ -1,6 +1,7 @@
 """`cleanup.py measure`: run the tools, merge their issues, record the metrics of this commit."""
 
 import sys
+import warnings
 from importlib.metadata import PackageNotFoundError, version
 
 from report import print_scorecard
@@ -62,14 +63,17 @@ def cmd_measure(a):
     repo = cleanup.repo
     data = cleanup.data
     tools = tool_versions()  # fail before any step runs
-    default_excludes = ("tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
+    default_excludes = ("**/tests/**", "**/test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
                         ".revibe/**")
     excludes = list(dict.fromkeys([*default_excludes, *a.exclude]))
-    scope = Scope(repo, shipped_files(repo, excludes))
+    with warnings.catch_warnings():
+        # parsing the repo's code (an invalid escape such as "\\.") must not print warnings into the output
+        warnings.simplefilter("ignore", SyntaxWarning)
+        scope = Scope(repo, shipped_files(repo, excludes))
+        found, metrics, not_measured, measured = run_steps(scope)
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
     snap = {"label": a.label, "date": now(), "commit": cleanup.commit, "dirty": dirty, "scope": excludes,
             "tools": tools, "files": len(scope.files), "metrics": {}, "not_measured": {}}
-    found, metrics, not_measured, measured = run_steps(scope)
     snap["metrics"].update(metrics)
     snap["not_measured"].update(not_measured)
     if scope.syntax_errors:

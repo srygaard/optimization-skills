@@ -19,26 +19,27 @@ class Deptry(Step):
     package = "deptry"
     version = "0.25.1"
     policy = {
-        "deps-none": "no dependency list at all: nobody can install it",
+        "deps-none": "no dependency list where pip or uv look for one (pyproject.toml, requirements.txt, setup.py)",
         "deps-undeclared": "an import that isn't a declared dependency, or only a dev one",
         "deps-unused": "declared dependency that is never imported",
-        "deps-unreadable": "dependencies listed only where deptry can't read them (environment.yml, setup.py, PEP 723)",
+        "deps-unreadable": ("dependencies listed only where pip reads them but deptry can't (setup.py, setup.cfg, "
+                            "requirements-*.txt)"),
     }
     metrics = (Metric("deps_missing", "Dependency problems"),)
 
-    def no_dependency_list(self, repo: Path, files: list) -> dict:
-        """High when nothing lists the dependencies; low when they are listed only where deptry can't read them."""
-        elsewhere = [n for n in ("environment.yml", "environment.yaml", "setup.py", "setup.cfg", "Pipfile")
-                     if (repo / n).exists()] + sorted(p.name for p in repo.glob("requirements?*.txt"))
-        if any("# /// script" in (repo / f).read_text(errors="replace") for f in files):
-            elsewhere.append("PEP 723 script blocks")
+    def no_dependency_list(self, repo: Path) -> dict:
+        """High when pip and uv find no dependency list at the repo root; low when the only one is where deptry
+        can't read it. A list anywhere else (env/, environment.yml, PEP 723 script blocks) doesn't count."""
+        unreadable = [n for n in ("setup.py", "setup.cfg") if (repo / n).exists()] + \
+            sorted(p.name for p in repo.glob("requirements?*.txt"))
         return self.issue(
-            "DEPS", "readiness", "no-dependency-list", "deps-unreadable" if elsewhere else "deps-none",
-            f"Dependencies are declared only in {', '.join(elsewhere)}, which deptry can't check" if elsewhere
-            else "No dependency list (pyproject.toml, requirements.txt, environment.yml): nobody can install it",
+            "DEPS", "readiness", "no-dependency-list", "deps-unreadable" if unreadable else "deps-none",
+            f"Dependencies are declared only in {', '.join(unreadable)}, which deptry can't check" if unreadable
+            else "No dependency list where pip or uv look for one (pyproject.toml, requirements.txt, setup.py)",
             key="DEPS|declare", effort="S",
-            fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies)."
-                 + (" Self-contained PEP 723 scripts can dismiss this." if elsewhere else "")),
+            fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies), or in a requirements.txt "
+                 "at the repo root. Move a list kept elsewhere (env/, environment.yml, a script's PEP 723 block) "
+                 "there."),
             done_when="`cleanup.py measure` runs deptry without 'not measured'.")
 
     def measure(self, scope) -> Result:
@@ -46,7 +47,7 @@ class Deptry(Step):
         repo = scope.repo
         source = deptry_source(repo)
         if source is None:
-            return Result([self.no_dependency_list(repo, scope.files)], {},
+            return Result([self.no_dependency_list(repo)], {},
                           skipped="no pyproject.toml dependencies or requirements.txt")
         # packages whose import name deptry can't guess when they aren't installed where it runs
         name_map = ("scikit-learn=sklearn,pillow=PIL,opencv-python=cv2,opencv-python-headless=cv2,pyyaml=yaml,"

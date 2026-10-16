@@ -34,8 +34,10 @@ service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded 
 - **Sensitive file names**, as possible credentials: `.env`, `.netrc`, `kaggle.json`, SSH keys, `*.pem`,
   `.aws/credentials`.
 - **Internal references** (ids starting with `internal-`): Mila paths (`/network/scratch`, `/home/mila`),
-  DRAC paths (`/project/def-…`), `#SBATCH --account`, lab hostnames and emails, wandb entities, and
-  absolute home paths.
+  DRAC paths (`/project/def-…`), SLURM accounts (`#SBATCH --account`, but not a template such as
+  `{account}`, and DRAC allocation names such as `def-prof` anywhere), HPC filesystem paths (`/scratch/<user>/…`,
+  `/work1/<group>/<user>`, `/lustre…`, `/gpfs…`), lab hostnames and emails (not public `docs.`/`www.`
+  sites), wandb entities, and absolute home paths.
 
 Add repo-specific patterns with `--internal REGEX` (Go RE2 syntax, no lookarounds); they are remembered.
 To change the file itself:

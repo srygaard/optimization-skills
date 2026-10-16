@@ -7,6 +7,7 @@ The measure steps are `Step`s. The leak scan has a `scan` method instead, which 
 
 from tools.base import Step
 from tools.betterleaks import Betterleaks
+from tools.clutter import Clutter
 from tools.deptry import Deptry
 from tools.file_length import FileLength
 from tools.large_files import LargeFiles
@@ -39,6 +40,7 @@ MEASURE: tuple[Step, ...] = (
     PipAudit(severity={"vuln-fixable": "high", "vuln-unfixed": "low", "pins-none": "low"}),
     License(severity={"license-missing": "high", "readme-missing": "high"}),
     LargeFiles(severity={"large-file": "high"}, settings={"large_file_mb": 5}),
+    Clutter(severity={"clutter-output": "high", "clutter-scratch": "high", "clutter-notes": "medium"}),
     FileLength(
         severity={"long-file": "medium"},
         settings={

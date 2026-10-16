@@ -1,7 +1,9 @@
-"""vulture, in process: unused functions and classes that nothing else names."""
+"""vulture, in process: unused functions and classes that nothing else names, and modules nothing imports."""
 
+import ast
 import json
 import re
+import warnings
 from pathlib import Path
 
 from utils.git import git
@@ -10,14 +12,14 @@ from tools.base import Metric, Result, Step
 
 
 class Vulture(Step):
-    """Unused functions and classes, checked against every file that could name them."""
+    """Unused functions, classes and modules, checked against every file that could name them."""
 
     name = "vulture"
     package = "vulture"
     version = "2.16"
     policy = {
-        "dead-large": "unused function or class of {dead_high_lines}+ lines",
-        "dead-small": "unused function or class of {min_dead_lines}+ lines, under {dead_high_lines}",
+        "dead-large": "unused function, class or module of {dead_high_lines}+ lines",
+        "dead-small": "unused function, class or module of {min_dead_lines}+ lines, under {dead_high_lines}",
         # set by `adjust` on other tools' issues
         "inside-dead-code": "complexity or a red flag inside a dead-code candidate: delete that instead",
     }
@@ -53,16 +55,26 @@ class Vulture(Step):
         names = {(scope.repo / f).resolve(): f for f in scope.files}
         refs = _references(scope.repo, scope.files)
         coverage = executed_lines(scope.repo)
+        modules = unimported_modules(scope, refs)
         found = []
         for item in v.get_unused_code(min_confidence=self.settings["min_confidence"], sort_by_size=True):
-            file = names.get(Path(item.filename))  # None: one of vulture's bundled whitelists
-            # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
-            # training_step, nn.Module overrides) that vulture can't see being called
-            if file and item.typ not in ("method", "property", "variable", "attribute", "import"):
+            if file := reported_file(item, names, modules):
                 found.append(dead_candidate(item, file, scope, refs, coverage))
-        total = sum(c["lines"] for c in found if c["unused"])
-        return Result([self.dead_issue(c, bool(coverage)) for c in found if c["lines"] >= self.settings["min_dead_lines"]],
-                      {"dead_code_loc": total})
+        total = sum(c["lines"] for c in found if c["unused"]) + sum(modules.values())
+        issues = [self.dead_issue(c, bool(coverage)) for c in found if c["lines"] >= self.settings["min_dead_lines"]]
+        issues += [self.module_issue(file, size) for file, size in modules.items()
+                   if size >= self.settings["min_dead_lines"]]
+        return Result(issues, {"dead_code_loc": total})
+
+    def module_issue(self, file: str, size: int) -> dict:
+        """A module that nothing imports or runs."""
+        return self.issue(
+            "DEAD", "dead-code", "unused-module", "dead-large" if size >= self.settings["dead_high_lines"] else "dead-small",
+            f"module `{file}` is never imported, run or named elsewhere ({size} lines)",
+            file=file, line=1, end_line=size, evidence={"lines": size}, effort="S",
+            fix=("Confirm nothing loads it (importlib with a built name, a launcher outside the repo, a script that "
+                 "reproduces a published result), then delete the file."),
+            done_when="Deleted, and the import test and safety net pass.")
 
     def adjust(self, found: list):
         """Complexity and red-flag issues inside a dead-code candidate drop to low: delete before refactoring."""
@@ -80,11 +92,12 @@ class Vulture(Step):
 def _references(repo: Path, shipped: list) -> list:
     """(path, text, strings_only) of tracked files that can name code without importing it.
 
-    Configs, scripts and notebooks count wholesale, as do Python files outside the scope (tests). In the
-    shipped Python files only string literals count, e.g. {"target": "main.SetupCallback"}.
+    Configs, scripts, notebooks and docs count wholesale, as do Python files outside the scope (tests). In the
+    shipped Python files only string literals name a symbol, e.g. {"target": "main.SetupCallback"}; their whole
+    text names a module.
     """
     text_suffixes = {".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".sh", ".bash", ".slurm", ".sbatch",
-                     ".ipynb", ".jinja", ".j2"}
+                     ".ipynb", ".jinja", ".j2", ".md", ".rst"}
     out = []
     shipped = set(shipped)
     for rel in git(repo, "ls-files", "-z").split("\0"):
@@ -122,6 +135,53 @@ def _named_in(refs: list, name: str, modules: list) -> tuple:
         elif (bare_string if strings_only else bare).search(text):
             mentioned.append(rel)
     return named, mentioned
+
+
+def reported_file(item, names: dict, modules: dict) -> str | None:
+    """The file in scope of a vulture item worth an issue, or None. Methods and properties are skipped: in ML code
+    they are mostly framework hooks (Lightning's training_step, nn.Module overrides) that vulture can't see being
+    called. A redundant if-condition is an `if True:` whose body runs. A module nobody imports is one issue of its
+    own, not one per definition in it."""
+    file = names.get(Path(item.filename))  # None: one of vulture's bundled whitelists
+    if file is None or file in modules or item.message == "redundant if-condition":
+        return None
+    return None if item.typ in ("method", "property", "variable", "attribute", "import") else file
+
+
+def unimported_modules(scope, refs: list) -> dict:
+    """{file: lines} of the modules in scope whose name no other tracked file mentions, leaving out scripts (a
+    `__main__` guard or work done at the top level) and modules Python or tools load by name."""
+    loaded_by_name = {"__init__", "__main__", "setup", "conftest", "sitecustomize", "usercustomize", "noxfile"}
+    out = {}
+    for file in scope.files:
+        stem = Path(file).stem
+        if stem in loaded_by_name or file not in scope.defs:
+            continue
+        text = (scope.repo / file).read_text(errors="replace")
+        if "__main__" in text or _runs_on_import(text):
+            continue
+        named = re.compile(rf"\b{re.escape(stem)}\b")
+        if not any(rel != file and named.search(other) for rel, other, _ in refs):
+            out[file] = len(text.splitlines())
+    return out
+
+
+def _runs_on_import(text: str) -> bool:
+    """Whether a module does work at the top level, as a script run with `python file.py` does."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        body = ast.parse(text).body
+    definitions = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Assign,
+                   ast.AnnAssign, ast.Pass)
+    for node in body:
+        if isinstance(node, definitions):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):  # a docstring
+            continue
+        if isinstance(node, (ast.If, ast.Try)):  # `if TYPE_CHECKING:` or `try: import x`
+            continue
+        return True
+    return False
 
 
 def runtime_lines(scope, file: str, line: int) -> set:
