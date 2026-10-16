@@ -29,7 +29,8 @@ MIN_CLONE_LINES = 10  # smaller duplicate blocks still count in Clone Ratio but 
 MIN_DEAD_LINES = 5  # smaller unused symbols still count in dead-code LOC but get no issue
 DEAD_HIGH_LINES = 20  # unused symbols at least this long are high: remove them before release
 LARGE_FILE_MB = 5
-LONG_FILE_LINES, WARN_FILE_LINES = 1000, 500  # source files longer than this should be split / are counted
+LONG_FILE_LINES = 1000  # source files longer than this should be split
+WARN_FILE_LINES = 500  # files longer than this are counted
 DEFAULT_EXCLUDES = (
     "tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**", ".cleanup/**",
 )

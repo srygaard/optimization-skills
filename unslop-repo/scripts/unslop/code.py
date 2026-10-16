@@ -40,7 +40,10 @@ class CodeIndex:
     """Functions and classes per file (qualname, span), the lines that hold code, and each file's length."""
 
     def __init__(self, repo: Path, files: list):
-        self.defs, self.code, self.lines, self.syntax_errors = {}, {}, {}, []
+        self.defs = {}
+        self.code = {}
+        self.lines = {}
+        self.syntax_errors = []
         for rel in files:
             text = (repo / rel).read_text(errors="replace")
             self.lines[rel] = len(text.splitlines())
@@ -183,7 +186,9 @@ def repetition_issues(findings: list, index) -> list:
     for f in findings:
         if f["rule"] != "duplicate-structure" or not (c := SCB_CLONE.search(f["msg"])):
             continue
-        lines, count, locs = int(c[1]), int(c[2]), f["locs"]
+        lines = int(c[1])
+        count = int(c[2])
+        locs = f["locs"]
         weight = lines * (count - 1)
         members = sorted({(file, index.qualname(file, line)) for file, line in locs})
         places = [f"{file}:{line}" for file, line in locs]
@@ -255,9 +260,11 @@ def _references(repo: Path, shipped: list) -> list:
     Configs, scripts and notebooks count wholesale, as do Python files outside the scope (tests). In the
     shipped Python files only string literals count, e.g. {"target": "main.SetupCallback"}.
     """
-    out, shipped = [], set(shipped)
+    out = []
+    shipped = set(shipped)
     for rel in git(repo, "ls-files", "-z").split("\0"):
-        path, suffix = repo / rel, Path(rel).suffix
+        path = repo / rel
+        suffix = Path(rel).suffix
         if not rel or not path.is_file() or path.stat().st_size > 5_000_000:
             continue
         if suffix in TEXT_SUFFIXES or (suffix == ".py" and rel not in shipped):
@@ -276,11 +283,14 @@ def _named_in(refs: list, name: str, modules: list) -> tuple:
         return [], []
     # `modules`: the defining module and its packages, since `pkg/__init__.py` often re-exports a class that
     # configs then name as `pkg.Name`
-    n, m = re.escape(name), "(?:" + "|".join(map(re.escape, modules)) + ")"
+    n = re.escape(name)
+    m = "(?:" + "|".join(map(re.escape, modules)) + ")"
     qualified = re.compile(rf"\b{m}[.:]{n}\b|\bfrom\s+[\w.]*\b{m}\s+import\s*(?:\([^)]*|[^\n]*)\b{n}\b")
     in_string = re.compile(rf"[\"'][^\"'\n]*\b{m}[.:]{n}[\"']")
-    bare, bare_string = re.compile(rf"\b{n}\b"), re.compile(rf"[\"']{n}[\"']")
-    named, mentioned = [], []
+    bare = re.compile(rf"\b{n}\b")
+    bare_string = re.compile(rf"[\"']{n}[\"']")
+    named = []
+    mentioned = []
     for rel, text, strings_only in refs:
         if (in_string if strings_only else qualified).search(text):
             named.append(rel)
@@ -324,7 +334,8 @@ def executed_lines(repo: Path) -> dict:
 def dead_candidate(m, index, refs: list, coverage: dict) -> dict:
     """A vulture row with what decides it: the symbol, the files that name or mention it, whether it ran.
     `unused` (nothing names it and it didn't run) is what dead-code LOC counts."""
-    file, line = Path(m["path"]).as_posix(), int(m["line"])
+    file = Path(m["path"]).as_posix()
+    line = int(m["line"])
     d = index.at_def_line(file, line)
     qual = d[2] if d and m["name"] and d[2].endswith(m["name"]) else (m["name"] or index.qualname(file, line))
     modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
@@ -337,7 +348,8 @@ def dead_candidate(m, index, refs: list, coverage: dict) -> dict:
 
 def dead_issue(c: dict, with_coverage: bool) -> dict:
     """Open, or dismissed when something names the symbol or its body ran."""
-    m, size = c["row"], c["lines"]
+    m = c["row"]
+    size = c["lines"]
     note = (f"referenced by name in {', '.join(c['hits'][:3])}" if c["hits"] else
             "executed in the coverage run" if c["ran"] else "")
     return issue(
@@ -360,7 +372,8 @@ def vulture_dead(repo, files, index) -> Result:
     p = run([uvx(), f"vulture@{TOOLS['vulture']}", *files, "--min-confidence", "60", "--sort-by-size"], cwd=repo)
     if p.returncode not in (0, 3):
         raise ToolError((p.stderr or p.stdout).strip()[-300:])
-    refs, coverage = _references(repo, files), executed_lines(repo)
+    refs = _references(repo, files)
+    coverage = executed_lines(repo)
     # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
     # training_step, nn.Module overrides) that vulture can't see being called
     found = [dead_candidate(m, index, refs, coverage) for m in vulture_rows(p.stdout)

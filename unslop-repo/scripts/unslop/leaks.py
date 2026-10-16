@@ -135,7 +135,8 @@ def find_at_head(repo: Path, groups: dict, tmp: Path):
     that added a line, and a file may have been moved since, so HEAD's contents are searched; a finding on a
     file name is at HEAD while the path is. A needle reaches git through a file in the private temp dir,
     never a command line; a multi-line secret is searched by its longest line."""
-    pattern, hits = Path(tmp, "needle"), {}
+    pattern = Path(tmp, "needle")
+    hits = {}
     for needle in {n for g in groups.values() for n in g["needles"]}:
         pattern.write_text(max(needle.splitlines(), key=len) + "\n")
         p = run(["git", "-C", repo, "grep", "-l", "-z", "-F", "-f", pattern, "HEAD", "--"])
@@ -152,7 +153,8 @@ def located(g: dict) -> tuple:
     """(rule, issue arguments) shared by both kinds of group: the most confident and specific rule, where the
     group is now, and the evidence."""
     rule = min(g["rules"], key=lambda r: (CONFIDENCE_RANK.get(g["rules"][r], 9), "generic" in r, r))
-    now_in, (file, line) = g["head_files"], g["example"]
+    now_in = g["head_files"]
+    file, line = g["example"]
     if now_in and file not in now_in:
         file, line = now_in[0], None
     return rule, {"file": file, "line": line, "evidence": {
@@ -248,7 +250,9 @@ def large_file_issues(repo: Path) -> list:
 def scan_history(repo: Path, exe: Path, rules: str) -> list:
     """Betterleaks over every commit, as issues."""
     with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
-        config, report, mirror = Path(tmp, "rules.toml"), Path(tmp, "report.json"), Path(tmp, "scan.git")
+        config = Path(tmp, "rules.toml")
+        report = Path(tmp, "report.json")
+        mirror = Path(tmp, "scan.git")
         config.write_text(rules)
         # Trust neither allow comments nor the repo's ignore files: a key waved past a pre-commit hook is what
         # this scan is for, and dismissals live in issues.json. Betterleaks reads ignore files from the root
