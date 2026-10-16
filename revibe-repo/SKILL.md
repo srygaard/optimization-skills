@@ -68,6 +68,8 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
   one module per purpose, e.g. `utils/paths.py`, `utils/timing.py`, `utils/git.py`. Never give a
   module the name of a standard-library module (`time.py`, `json.py`, `logging.py`, `types.py`): it
   shadows the library whenever its folder is on `sys.path`, as it is when a script there runs.
+- Prefer `pathlib` to string paths: build paths with `/` (`root / "data" / name`) and use `.read_text()`,
+  `.exists()` and `.glob()`, instead of `os.path.join`, f-string paths or `open(dir + "/" + name)`.
 
 ## 2. Severity decides the phase
 
@@ -151,8 +153,8 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 
 `scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
 scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. The modules it imports sit next to it:
-`common` (severity and helpers), `state` (issues.json and snapshots), `scope` (the files in scope),
-`leaks`, `measure`, `report`, and `tools/`, one module per tool. Each tool module starts with its `TOOL`
+`state` (issues.json, its severity scale and the snapshots), `scope` (the files in scope), `leaks`,
+`measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module per purpose). Each tool module starts with its `TOOL`
 (name, PyPI package, settings, severity policy), then runs the tool and turns what it finds into issues;
 `tools/base.py` defines `Tool`, which builds every issue, and the `Result` a measure step returns.
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check

@@ -3,12 +3,13 @@
 import shutil
 from pathlib import Path
 
-from common import SCRIPTS, Severity, repo_root
 from state import (
+    Severity,
     latest_snapshot, leak_scan_current, load_issues, load_snapshot, open_issues, recount_head_snapshot,
     require_leak_scan, save_issues, state_dir,
 )
 from tools import file_length, policies, scb_check
+from utils.git import repo_root
 
 
 # --- scorecard -------------------------------------------------------------------------------------
@@ -108,7 +109,7 @@ HOW_TO = """\
 4. One issue per commit, with a `Cleanup-Issue: <ID>` trailer. Run the safety net after each commit. Delete dead code before refactoring: issues marked "Inside dead-code candidate" go away with it.
 5. Record each outcome in `.cleanup/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity` and a `summary`; the other fields are optional) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
 6. No nitpicks: only change what makes the code meaningfully easier to understand, use or change. A refactor that adds lines needs a reason. Never pack code to save lines (`a, b = f(), g()`, several statements on one line): LOC should fall because code is gone.
-7. While refactoring: if a file holds many pure functions, consider organizing them into classes; if a function returns a tuple, consider a named tuple; give each function or method you touch a one-sentence docstring on its purpose if it has none; don't introduce new globals (keep a constant next to its only user, pass state as arguments); and instead of a catch-all `common.py` or `utils.py`, put helpers in a `utils/` package with one module per purpose (`utils/paths.py`, `utils/timing.py`, `utils/git.py`), never named after a standard-library module such as `time.py` or `json.py`, which it would shadow.
+7. While refactoring: if a file holds many pure functions, consider organizing them into classes; if a function returns a tuple, consider a named tuple; give each function or method you touch a one-sentence docstring on its purpose if it has none; don't introduce new globals (keep a constant next to its only user, pass state as arguments); and instead of a catch-all `common.py` or `utils.py`, put helpers in a `utils/` package with one module per purpose (`utils/paths.py`, `utils/timing.py`, `utils/git.py`), never named after a standard-library module such as `time.py` or `json.py`, which it would shadow; and use `pathlib` (`root / "data" / name`, `.read_text()`, `.exists()`) instead of string paths built with `os.path.join` or f-strings.
 8. Re-measure when you stop (the label is any name): `.cleanup/cleanup.py leaks .`, `.cleanup/cleanup.py measure . --label after-<what>`, `.cleanup/cleanup.py compare . baseline`, `.cleanup/cleanup.py report .` (needs uv)."""
 
 def cell(text) -> str:
@@ -221,12 +222,14 @@ def cmd_report(a):
     save_issues(d, data, repo)  # refresh release status
     recount_head_snapshot(d, data, repo)
     (d / "report.md").write_text(render_report(repo, data, d))
-    if SCRIPTS != d.resolve():  # lets another agent re-measure without the skill
-        for f in SCRIPTS.glob("*.py"):
+    scripts = Path(__file__).resolve().parent  # cleanup.py, the modules it imports, tools/ and utils/
+    if scripts != d.resolve():  # lets another agent re-measure without the skill
+        for f in scripts.glob("*.py"):
             if not f.name.startswith("test_"):
                 shutil.copy2(f, d)
-        shutil.rmtree(d / "tools", ignore_errors=True)  # a module renamed since the last copy must not linger
-        shutil.copytree(SCRIPTS / "tools", d / "tools", ignore=shutil.ignore_patterns("__pycache__"))
+        for package in ("tools", "utils"):
+            shutil.rmtree(d / package, ignore_errors=True)  # a module renamed since the last copy must not linger
+            shutil.copytree(scripts / package, d / package, ignore=shutil.ignore_patterns("__pycache__"))
     counts = " · ".join(f"{len(open_issues(data, s.name))} {s.name}" for s in Severity)
     print(f"release: {data['release_status'].upper()}  ·  open {counts}")
     print(f"-> {d / 'report.md'}")

@@ -25,7 +25,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
-import common
 import measure
 import scope
 import state
@@ -54,7 +53,7 @@ def offline():
     check(not betterleaks.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
     rows = tools.policies()
-    check(all(sev in common.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
+    check(all(sev in state.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
     check(len(rows) == sum(len(m.TOOL.policy) for m in tools.ALL), "no policy key is set by two tools")
     pinned = set(re.findall(r'"([\w.-]+)==', CLEANUP.read_text().split("# ///")[1]))
     check(pinned == {m.TOOL.package for m in tools.ANALYZERS}, "cleanup.py's header pins exactly the analyzers' packages")

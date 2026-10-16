@@ -2,7 +2,7 @@
 
 import re
 
-from common import git
+from utils.git import git
 from tools.base import Result, Tool
 
 TOOL = Tool(
