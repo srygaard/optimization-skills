@@ -102,32 +102,19 @@ def preview(secret: str) -> str:
     return f"{prefix[0] if prefix else ''}… ({len(secret)} chars)"
 
 
-def head_paths(repo: Path, needles: set, tmp: Path) -> dict:
-    """{needle: paths of the files at HEAD that contain it}. A needle reaches git through a file in the
-    private temp dir, never a command line; a multi-line secret is searched by its longest line."""
-    pattern, out = Path(tmp, "needle"), {}
-    for needle in needles:
-        pattern.write_text(max(needle.splitlines(), key=len) + "\n")
-        p = run(["git", "-C", repo, "grep", "-l", "-z", "-F", "-f", pattern, "HEAD", "--"])
-        if p.returncode not in (0, 1):  # 1: no match
-            die(f"git grep failed: {p.stderr.strip()[-200:]}")
-        out[needle] = sorted(x.split(":", 1)[1] for x in p.stdout.split("\0") if x)
-    pattern.unlink(missing_ok=True)
-    return out
-
-
-def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
-    """Group Betterleaks findings by distinct secret. Plaintext never leaves this function."""
+def group_findings(findings: list) -> dict:
+    """{basis: group} of Betterleaks findings, grouped the way they get fixed: a credential wherever it
+    appears (it is rotated once), an internal reference per rule and file. Groups hold the plaintext
+    (`needles`, `matches`); issues get only `preview`."""
     groups = {}
     for f in findings:
         secret = f.get("Secret") or ""
         internal = "internal" in (f.get("Tags") or [])
-        # a credential is one issue wherever it appears (it is rotated once); internal references are
-        # grouped per file, which is how they get fixed
         basis = f"internal|{f['RuleID']}|{f['File']}" if internal else secret or f"path:{f['File']}"
+        first = (f.get("Date", ""), f["Commit"], f["File"], f["StartLine"])
         g = groups.setdefault(basis, {
-            "rules": {}, "internal": internal, "locs": [], "fingerprints": [], "needles": set(), "paths": set(),
-            "first": None, "example": (f["File"], f["StartLine"]), "matches": set(),
+            "basis": basis, "rules": {}, "internal": internal, "locs": [], "fingerprints": [], "needles": set(),
+            "paths": set(), "first": first, "example": (f["File"], f["StartLine"]), "matches": set(),
             "preview": preview(secret) if secret else "(file name)",
         })
         g["rules"][f["RuleID"]] = (f.get("Attributes") or {}).get("confidence", "high")
@@ -139,63 +126,90 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
         g["paths"].add(f["File"])
         if secret.strip():
             g["needles"].add(secret)
-        g["first"] = min(g["first"] or (f.get("Date", ""), f["Commit"], f["File"], f["StartLine"]),
-                         (f.get("Date", ""), f["Commit"], f["File"], f["StartLine"]))
+        g["first"] = min(g["first"], first)
+    return groups
 
-    # Where is it now? Betterleaks reports the commit and path that added a line, and a file may have
-    # been moved since, so search HEAD's contents. A finding on a file name is at HEAD while the path is.
-    hits = head_paths(repo, {n for g in groups.values() for n in g["needles"]}, tmp)
+
+def find_at_head(repo: Path, groups: dict, tmp: Path):
+    """Set each group's `head_files`: the files at HEAD that hold it. Betterleaks reports the commit and path
+    that added a line, and a file may have been moved since, so HEAD's contents are searched; a finding on a
+    file name is at HEAD while the path is. A needle reaches git through a file in the private temp dir,
+    never a command line; a multi-line secret is searched by its longest line."""
+    pattern, hits = Path(tmp, "needle"), {}
+    for needle in {n for g in groups.values() for n in g["needles"]}:
+        pattern.write_text(max(needle.splitlines(), key=len) + "\n")
+        p = run(["git", "-C", repo, "grep", "-l", "-z", "-F", "-f", pattern, "HEAD", "--"])
+        if p.returncode not in (0, 1):  # 1: no match
+            die(f"git grep failed: {p.stderr.strip()[-200:]}")
+        hits[needle] = {x.split(":", 1)[1] for x in p.stdout.split("\0") if x}
+    pattern.unlink(missing_ok=True)
     tree = set(git(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0"))
-    out = []
-    for basis, g in groups.items():
-        # IDs come from facts about the finding, never from the secret: a hash of a short password
-        # next to its prefix and length could be brute-forced offline
-        key = (hashlib.sha256(basis.encode()).hexdigest() if g["internal"] or not g["needles"] else
-               "|".join(map(str, g["first"][1:])))
-        rule = min(g["rules"], key=lambda r: (CONFIDENCE_RANK.get(g["rules"][r], 9), "generic" in r, r))
-        now_in = sorted({p for n in g["needles"] for p in hits[n]} if g["needles"] else g["paths"] & tree)
-        g["at_head"] = bool(now_in)
-        file, line = g["example"]
-        if now_in and file not in now_in:
-            file, line = now_in[0], None
-        where = "at HEAD" if g["at_head"] else "only in history"
-        evidence = {
-            "rules": sorted(g["rules"]), "preview": g["preview"], "at_head": g["at_head"], "head_files": now_in[:10],
-            "first_commit": g["first"][1][:12], "first_date": g["first"][0],
-            "occurrences": len(g["locs"]), "locations": g["locs"][:10], "fingerprints": g["fingerprints"][:10],
-        }
-        if g["internal"]:
-            more = f" and {len(g['matches']) - 1} more" if len(g["matches"]) > 1 else ""
-            evidence["matches"] = sorted(g["matches"])[:20]
-            out.append(issue(
-                "INT", "betterleaks", "internal-ref", rule, "internal-head" if g["at_head"] else "internal-history",
-                f"Internal reference `{g['preview']}`{more} ({where})",
-                key=f"INT|{key}", file=file, line=line, evidence=evidence,
-                fix=("Replace it with a config value, CLI argument or environment variable "
-                     "(or a neutral placeholder in docs)." if g["at_head"] else
-                     "Only matters if the history is published; a fresh squashed history drops it."),
-                done_when="`cleanup.py leaks` no longer reports it at HEAD."))
-            continue
-        certain = g["rules"][rule] in ("high", "medium")
-        if certain:
-            fix = ("User: revoke/rotate this credential at its provider first. "
-                   + ("Then read it from an environment variable (add a `.env.example`, gitignore `.env`) "
-                      "and keep it out of the published history: publish a fresh squashed history, or "
-                      "rewrite history with the user's approval." if g["at_head"] else
-                      "It is gone from HEAD but still in history: publish a fresh squashed history, or "
-                      "rewrite history with the user's approval.")
-                   + " The scan keeps finding it in the local history, so then dismiss this issue with a note "
-                     "saying it was rotated and how history is handled.")
-        else:
-            fix = ("Check whether this is a real credential by looking at the location; never print the "
-                   "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
-                   "any secret.")
-        out.append(issue(
-            "LEAK", "betterleaks", "leak", rule, "credential" if certain else "possible-credential",
-            f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} ({where})",
-            key=f"LEAK|{key}", file=file, line=line, evidence=evidence, fix=fix,
-            done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled."))
-    return out
+    for g in groups.values():
+        g["head_files"] = sorted(set().union(*(hits[n] for n in g["needles"])) if g["needles"] else g["paths"] & tree)
+
+
+def located(g: dict) -> tuple:
+    """(rule, issue arguments) shared by both kinds of group: the most confident and specific rule, where the
+    group is now, and the evidence."""
+    rule = min(g["rules"], key=lambda r: (CONFIDENCE_RANK.get(g["rules"][r], 9), "generic" in r, r))
+    now_in, (file, line) = g["head_files"], g["example"]
+    if now_in and file not in now_in:
+        file, line = now_in[0], None
+    return rule, {"file": file, "line": line, "evidence": {
+        "rules": sorted(g["rules"]), "preview": g["preview"], "at_head": bool(now_in), "head_files": now_in[:10],
+        "first_commit": g["first"][1][:12], "first_date": g["first"][0],
+        "occurrences": len(g["locs"]), "locations": g["locs"][:10], "fingerprints": g["fingerprints"][:10],
+    }}
+
+
+def internal_issue(g: dict) -> dict:
+    rule, at = located(g)
+    here = at["evidence"]["at_head"]
+    more = f" and {len(g['matches']) - 1} more" if len(g["matches"]) > 1 else ""
+    at["evidence"]["matches"] = sorted(g["matches"])[:20]
+    return issue(
+        "INT", "betterleaks", "internal-ref", rule, "internal-head" if here else "internal-history",
+        f"Internal reference `{g['preview']}`{more} ({'at HEAD' if here else 'only in history'})",
+        key=f"INT|{hashlib.sha256(g['basis'].encode()).hexdigest()}", **at,
+        fix=("Replace it with a config value, CLI argument or environment variable "
+             "(or a neutral placeholder in docs)." if here else
+             "Only matters if the history is published; a fresh squashed history drops it."),
+        done_when="`cleanup.py leaks` no longer reports it at HEAD.")
+
+
+def credential_issue(g: dict) -> dict:
+    rule, at = located(g)
+    here = at["evidence"]["at_head"]
+    # IDs come from facts about the finding, never from the secret: a hash of a short password next to its
+    # prefix and length could be brute-forced offline
+    key = "|".join(map(str, g["first"][1:])) if g["needles"] else hashlib.sha256(g["basis"].encode()).hexdigest()
+    certain = g["rules"][rule] in ("high", "medium")
+    if certain:
+        fix = ("User: revoke/rotate this credential at its provider first. "
+               + ("Then read it from an environment variable (add a `.env.example`, gitignore `.env`) "
+                  "and keep it out of the published history: publish a fresh squashed history, or "
+                  "rewrite history with the user's approval." if here else
+                  "It is gone from HEAD but still in history: publish a fresh squashed history, or "
+                  "rewrite history with the user's approval.")
+               + " The scan keeps finding it in the local history, so then dismiss this issue with a note "
+                 "saying it was rotated and how history is handled.")
+    else:
+        fix = ("Check whether this is a real credential by looking at the location; never print the "
+               "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
+               "any secret.")
+    return issue(
+        "LEAK", "betterleaks", "leak", rule, "credential" if certain else "possible-credential",
+        f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} "
+        f"({'at HEAD' if here else 'only in history'})",
+        key=f"LEAK|{key}", **at, fix=fix,
+        done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled.")
+
+
+def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
+    """One issue per group of Betterleaks findings. Plaintext stays in the groups."""
+    groups = group_findings(findings)
+    find_at_head(repo, groups, tmp)
+    return [internal_issue(g) if g["internal"] else credential_issue(g) for g in groups.values()]
 
 
 def large_file_issues(repo: Path) -> list:
