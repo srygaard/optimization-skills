@@ -51,11 +51,12 @@ def no_dependency_list(repo: Path, files: list) -> dict:
         done_when="`cleanup.py measure` runs deptry without 'not measured'.")
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     """Undeclared, unused and dev-only dependencies, or one issue saying there is no list deptry can read."""
+    repo = scope.repo
     source = deptry_source(repo)
     if source is None:
-        return Result([no_dependency_list(repo, files)], {},
+        return Result([no_dependency_list(repo, scope.files)], {},
                       skipped="no pyproject.toml dependencies or requirements.txt")
     # packages whose import name deptry can't guess when they aren't installed where it runs
     name_map = ("scikit-learn=sklearn,pillow=PIL,opencv-python=cv2,opencv-python-headless=cv2,pyyaml=yaml,"

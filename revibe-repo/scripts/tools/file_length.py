@@ -1,4 +1,4 @@
-"""Source file length, from the code index."""
+"""Source file length, from the scope's index."""
 
 from tools.base import Result, Tool
 
@@ -14,10 +14,10 @@ TOOL = Tool(
 )
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     """Average length of the source files, how many pass 500 and 1000 lines, and an issue for the latter."""
     long_file = TOOL.settings["long_file_lines"]
-    lines = index.lines
+    lines = scope.lines
     out = [TOOL.issue(
         "SIZE", "file-length", "long-file", "long-file", f"`{f}` has {n:,} lines",
         file=f, evidence={"lines": n, "weight": n}, effort="M",

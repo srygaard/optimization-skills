@@ -1,4 +1,4 @@
-"""Module-level globals, from the code index: constants and state a module keeps outside its functions."""
+"""Module-level globals, from the scope's index: constants and state a module keeps outside its functions."""
 
 from tools.base import Result, Tool
 
@@ -10,9 +10,9 @@ TOOL = Tool(
 )
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     """How many module-level globals the code has, as a metric and as one issue naming the files with most."""
-    per_file = {f: names for f, names in index.globals.items() if names}
+    per_file = {f: names for f, names in scope.globals.items() if names}
     total = sum(len(names) for names in per_file.values())
     if not total:
         return Result([], {"globals": 0})

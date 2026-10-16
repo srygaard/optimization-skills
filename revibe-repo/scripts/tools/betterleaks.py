@@ -17,7 +17,7 @@ from pathlib import Path
 
 from utils.git import git
 from utils.process import run
-from tools.base import Tool
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="betterleaks",
@@ -237,8 +237,12 @@ def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
     return [internal_issue(g) if g["internal"] else credential_issue(g) for g in groups.values()]
 
 
-def scan(repo: Path, exe: Path, rules: str) -> list:
-    """Betterleaks over every commit, as issues."""
+def scan(repo: Path, internal: list) -> Result:
+    """Betterleaks over every commit, as issues, with the version and the rules (`--internal` patterns included)
+    it ran."""
+    exe = executable()
+    version = run([exe, "version"]).stdout.strip() or "?"
+    rules = rule_set(internal)
     with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
         config = Path(tmp, "rules.toml")
         report = Path(tmp, "report.json")
@@ -253,4 +257,5 @@ def scan(repo: Path, exe: Path, rules: str) -> list:
                  "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
         if p.returncode or not report.exists():
             raise SystemExit(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
-        return leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
+        issues = leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
+    return Result(issues, {"version": version, "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12]})

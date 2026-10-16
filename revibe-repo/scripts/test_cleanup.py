@@ -30,7 +30,7 @@ import scope
 import state
 import tools
 from tools import betterleaks, deptry, scb_check, vulture
-from tools.base import Result, Tool
+from tools.base import Result, Step, Tool
 
 CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
 failures = []
@@ -55,6 +55,7 @@ def offline():
     rows = tools.policies()
     check(all(sev in state.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
     check(len(rows) == sum(len(m.TOOL.policy) for m in tools.ALL), "no policy key is set by two tools")
+    check(all(isinstance(m, Step) for m in tools.MEASURE), "every measure step has a TOOL and a measure function")
     pinned = set(re.findall(r'"([\w.-]+)==', CLEANUP.read_text().split("# ///")[1]))
     check(pinned == {m.TOOL.package for m in tools.ANALYZERS}, "cleanup.py's header pins exactly the analyzers' packages")
 
@@ -84,13 +85,13 @@ def offline():
 
     step_a = Tool("a", {"x": ("low", "a test row")})
 
-    def ok(repo, files, index):
+    def ok(scope):
         return Result([step_a.issue("T", "bug", "x", "x", "found by a")], {"m": 1})
 
-    def nothing_to_read(repo, files, index):
+    def nothing_to_read(scope):
         return Result([], {}, skipped="no lockfile")
 
-    def broken(repo, files, index):
+    def broken(scope):
         raise KeyError("total_loc")
 
     trainer = ["trainer", "pkg"]  # pkg/trainer.py: the module, then its packages
@@ -112,16 +113,16 @@ def offline():
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
 
     with tempfile.TemporaryDirectory() as tmp:
-        none = deptry.measure(Path(tmp), [], None)
+        none = deptry.measure(scope.Scope(Path(tmp), []))
         Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
-        inline = deptry.measure(Path(tmp), ["tool.py"], None)
+        inline = deptry.measure(scope.Scope(Path(tmp), ["tool.py"]))
         check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
               "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
                                        "    def m(self):\n        return 2\n")
-        index = scope.CodeIndex(Path(tmp), ["mod.py"])
+        index = scope.Scope(Path(tmp), ["mod.py"])
         check(vulture.runtime_lines(index, "mod.py", 4) == {5} and vulture.runtime_lines(index, "mod.py", 8) == {12},
               "coverage counts function and method bodies, not def or class-body lines that run on import")
 
@@ -149,7 +150,7 @@ def offline():
         error = load('{"issues": [}')
         check(isinstance(error, str) and "not valid JSON (line 1" in error, "broken JSON stops the command with its line")
 
-    found, metrics, not_measured, measured = measure.run_steps(None, [], None, steps=(
+    found, metrics, not_measured, measured = measure.run_steps(None, steps=(
         SimpleNamespace(TOOL=step_a, measure=ok),
         SimpleNamespace(TOOL=Tool("b", {}), measure=nothing_to_read),
         SimpleNamespace(TOOL=Tool("c", {}), measure=broken)))

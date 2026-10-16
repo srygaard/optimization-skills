@@ -53,9 +53,10 @@ def analyze(root: Path, files: list) -> tuple:
     return flags, log.getvalue()
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     from scb_check.reporting.score import compute_report
 
+    files = scope.files
     if not files:
         return Result([], {}, skipped="no Python files in scope")
     with tempfile.TemporaryDirectory(prefix="cleanup-scb-") as tmp:
@@ -64,13 +65,13 @@ def measure(repo, files, index) -> Result:
         src = Path(tmp).resolve()
         for f in files:
             (src / f).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(repo / f, src / f)
+            shutil.copyfile(scope.repo / f, src / f)
         flags, warnings = analyze(src, files)
     if not flags.lines.total_loc_by_file:
         raise ToolError("no file in scope could be parsed")
     m = compute_report(flags).to_dict()
-    out = [*wrapper_issues(src, flags, index), *repetition_issues(src, flags, index),
-           *complexity_issues(src, flags, index)]
+    out = [*wrapper_issues(src, flags, scope), *repetition_issues(src, flags, scope),
+           *complexity_issues(src, flags, scope)]
     loc = m["total_loc"] or 1
     metrics = dict(
         loc=m["total_loc"], cc_over_10=m["high_cc_functions"], verbosity=round(m["verbosity"], 4),
@@ -82,7 +83,7 @@ def measure(repo, files, index) -> Result:
     return Result(out, metrics, notes={"violation_pct": "ast-grep did not run"} if "ast-grep" in warnings else None)
 
 
-def wrapper_issues(src: Path, flags, index) -> list:
+def wrapper_issues(src: Path, flags, scope) -> list:
     """Ousterhout's pass-through methods and shallow modules, from scb-check's wrapper rules."""
     red_flags = {"trivial-wrapper": "pass-through-method", "low-use-short-function": "shallow-module"}
     out = []
@@ -90,7 +91,7 @@ def wrapper_issues(src: Path, flags, index) -> list:
         if f.rule_id not in red_flags:
             continue
         file = rel(src, f.file)
-        d = index.at_def_line(file, f.start_line)
+        d = scope.at_def_line(file, f.start_line)
         out.append(TOOL.issue(
             "RF", "red-flag", red_flags[f.rule_id], "wrapper", f"{f.rule_id}: {f.message}",
             file=file, symbol=d.qualname if d else "<module>", line=f.start_line,
@@ -101,7 +102,7 @@ def wrapper_issues(src: Path, flags, index) -> list:
     return out
 
 
-def repetition_issues(src: Path, flags, index) -> list:
+def repetition_issues(src: Path, flags, scope) -> list:
     """One issue per duplicate group, named after the functions that hold the copies. A copy's length counts
     its code lines, as scb-check prints it."""
     clone_sloc = {e.file: e.lines for e in flags.lines.clone_sloc_lines_by_file}
@@ -119,7 +120,7 @@ def repetition_issues(src: Path, flags, index) -> list:
         count = anchor.instance_count
         locs = [(rel(src, c.file), c.start_line) for c in group]
         weight = lines * (count - 1)
-        members = sorted({(file, index.qualname(file, line)) for file, line in locs})
+        members = sorted({(file, scope.qualname(file, line)) for file, line in locs})
         places = [f"{file}:{line}" for file, line in locs]
         out.append(TOOL.issue(
             "RF", "red-flag", "repetition", "repetition" if weight >= TOOL.settings["medium_dup_lines"] else "repetition-small",
@@ -134,7 +135,7 @@ def repetition_issues(src: Path, flags, index) -> list:
     return out
 
 
-def complexity_issues(src: Path, flags, index) -> list:
+def complexity_issues(src: Path, flags, scope) -> list:
     """One issue per function over the CC threshold, with its cognitive complexity as evidence."""
     out = []
     for fn in flags.findings.high_cc_functions:
@@ -142,7 +143,7 @@ def complexity_issues(src: Path, flags, index) -> list:
         line = fn.start_line
         cc = fn.cyc_complexity
         sloc = fn.sloc
-        d = index.at_def_line(file, line) or Def(line, line, fn.name, line, "function")
+        d = scope.at_def_line(file, line) or Def(line, line, fn.name, line, "function")
         mass = cc * math.sqrt(sloc)
         out.append(TOOL.issue(
             "CX", "complexity", "cc", "complex" if mass >= TOOL.settings["medium_mass"] else "complex-small",

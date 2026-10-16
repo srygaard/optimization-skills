@@ -72,14 +72,14 @@ def _named_in(refs: list, name: str, modules: list) -> tuple:
     return named, mentioned
 
 
-def runtime_lines(index, file: str, line: int) -> set:
+def runtime_lines(scope, file: str, line: int) -> set:
     """Lines that only run when the code is used: a function's body, or the bodies of a class's methods.
     Def, decorator and class-body lines run on import, so coverage of them says nothing."""
-    d = index.at_def_line(file, line)
+    d = scope.at_def_line(file, line)
     if not d:
         return set()
     bodies = [d] if d.kind == "function" else [
-        x for x in index.defs.get(file, ()) if x.kind == "function" and d.start <= x.start and x.end <= d.end]
+        x for x in scope.defs.get(file, ()) if x.kind == "function" and d.start <= x.start and x.end <= d.end]
     return {n for b in bodies for n in range(b.def_line + 1, b.end + 1)}
 
 
@@ -91,20 +91,20 @@ def executed_lines(repo: Path) -> dict:
             for name, f in json.loads(cov.read_text()).get("files", {}).items()}
 
 
-def dead_candidate(item, file: str, index, refs: list, coverage: dict) -> dict:
+def dead_candidate(item, file: str, scope, refs: list, coverage: dict) -> dict:
     """A vulture item in `file` with what decides it: the symbol, the files that name or mention it, whether
     it ran. `unused` (nothing names it and it didn't run) is what dead-code LOC counts."""
     line = item.first_lineno
     unreachable = item.typ == "unreachable_code"
-    d = index.at_def_line(file, line)
+    d = scope.at_def_line(file, line)
     if unreachable:
-        qual = index.qualname(file, line)
+        qual = scope.qualname(file, line)
     else:
         qual = d.qualname if d and d.qualname.endswith(item.name) else item.name
     modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
     # unreachable code can't be referenced
     hits, mentions = ([], []) if unreachable else _named_in(refs, qual.rsplit(".", 1)[-1], modules)
-    ran = bool(coverage.get(file, set()) & runtime_lines(index, file, line))
+    ran = bool(coverage.get(file, set()) & runtime_lines(scope, file, line))
     return {"item": item, "rule": "unreachable" if unreachable else item.typ, "file": file, "line": line,
             "lines": item.size, "symbol": qual, "hits": hits, "mentions": mentions, "ran": ran,
             "unused": not hits and not ran}
@@ -129,25 +129,25 @@ def dead_issue(c: dict, with_coverage: bool) -> dict:
         done_when="Deleted, and the import test and safety net pass.")
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     from vulture import Vulture
 
-    if not files:
+    if not scope.files:
         return Result([], {"dead_code_loc": 0})
-    config = read_pyproject(repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
+    config = read_pyproject(scope.repo).get("tool", {}).get("vulture", {})  # what the CLI would read from the repo
     v = Vulture(ignore_names=config.get("ignore_names", []), ignore_decorators=config.get("ignore_decorators", []))
-    v.scavenge([repo / f for f in files], exclude=config.get("exclude", []))
+    v.scavenge([scope.repo / f for f in scope.files], exclude=config.get("exclude", []))
     # vulture resolves paths, and a tracked symlink can resolve outside the repo
-    names = {(repo / f).resolve(): f for f in files}
-    refs = _references(repo, files)
-    coverage = executed_lines(repo)
+    names = {(scope.repo / f).resolve(): f for f in scope.files}
+    refs = _references(scope.repo, scope.files)
+    coverage = executed_lines(scope.repo)
     found = []
     for item in v.get_unused_code(min_confidence=TOOL.settings["min_confidence"], sort_by_size=True):
         file = names.get(Path(item.filename))  # None: one of vulture's bundled whitelists
         # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
         # training_step, nn.Module overrides) that vulture can't see being called
         if file and item.typ not in ("method", "property", "variable", "attribute", "import"):
-            found.append(dead_candidate(item, file, index, refs, coverage))
+            found.append(dead_candidate(item, file, scope, refs, coverage))
     total = sum(c["lines"] for c in found if c["unused"])
     return Result([dead_issue(c, bool(coverage)) for c in found if c["lines"] >= TOOL.settings["min_dead_lines"]],
                   {"dead_code_loc": total})

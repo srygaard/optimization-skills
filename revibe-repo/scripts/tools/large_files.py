@@ -4,7 +4,7 @@ from pathlib import Path
 
 from utils.git import git
 from utils.process import run
-from tools.base import Tool
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="git-history",
@@ -16,7 +16,8 @@ TOOL = Tool(
 )
 
 
-def scan(repo: Path) -> list:
+def scan(repo: Path) -> Result:
+    """Blobs over the size limit anywhere in history, one issue per path, at HEAD or only in history."""
     paths = {}
     for row in git(repo, "rev-list", "--objects", "--all").splitlines():
         sha, _, path = row.partition(" ")
@@ -46,4 +47,4 @@ def scan(repo: Path) -> list:
                  "Zenodo) and download on demand; check that you may redistribute it." if here else
                  "Only matters if the history is published; a fresh squashed history drops it."),
             done_when="Not in the tree, and not in any history that will be published."))
-    return out
+    return Result(out, {})

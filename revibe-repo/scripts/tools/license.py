@@ -14,9 +14,9 @@ TOOL = Tool(
 )
 
 
-def measure(repo, files, index) -> Result:
+def measure(scope) -> Result:
     """An issue for a missing LICENSE file, and one for a missing README, at the repo root."""
-    names = git(repo, "ls-tree", "--name-only", "HEAD").splitlines()
+    names = git(scope.repo, "ls-tree", "--name-only", "HEAD").splitlines()
     out = []
     if not any(re.fullmatch(r"(?i)(?:licen[cs]e|copying)(?:\.(?:md|txt|rst))?", n) for n in names):
         out.append(TOOL.issue(

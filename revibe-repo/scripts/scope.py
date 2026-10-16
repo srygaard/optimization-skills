@@ -1,4 +1,5 @@
-"""The code in scope: the tracked Python files left after the excludes, and an index of what they define."""
+"""The code in scope: the tracked Python files left after the excludes, and the `Scope` every measure step
+reads."""
 
 import ast
 from fnmatch import fnmatch
@@ -53,10 +54,13 @@ class Def(NamedTuple):
     kind: str  # "function" or "class"
 
 
-class CodeIndex:
-    """Functions and classes per file (a `Def` each), each file's length, and its module-level globals."""
+class Scope:
+    """What a measure step reads: the repo, the files in scope, and for each file its functions and classes
+    (a `Def` each), its length and its module-level globals."""
 
     def __init__(self, repo: Path, files: list):
+        self.repo = repo
+        self.files = files
         self.defs = {}
         self.lines = {}
         self.globals = {}

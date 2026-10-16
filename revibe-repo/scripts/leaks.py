@@ -1,12 +1,10 @@
 """`cleanup.py leaks`: the mandatory leak scan, Betterleaks and large files over the full history."""
 
-import hashlib
 from pathlib import Path
 
 from state import Cleanup, Severity, merge, now
 from tools import betterleaks, large_files
 from utils.git import git, head
-from utils.process import run
 
 
 def print_leaks(repo: Path, data: dict, found: list, version: str):
@@ -25,17 +23,16 @@ def cmd_leaks(a):
     cleanup = Cleanup(a.repo)
     repo = cleanup.repo
     data = cleanup.data
-    exe = betterleaks.executable()
-    version = run([exe, "version"]).stdout.strip() or "?"
     # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
     internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
-    rules = betterleaks.rule_set(internal)
-    found = betterleaks.scan(repo, exe, rules) + large_files.scan(repo)
+    leaks = betterleaks.scan(repo, internal)
+    found = leaks.issues + large_files.scan(repo).issues
     merge(data, found, {betterleaks.TOOL.name, large_files.TOOL.name})
+    version = leaks.metrics["version"]
     data["tools"][betterleaks.TOOL.name] = version
     data["leak_scan"] = {
         "commit": head(repo), "date": now(), "betterleaks": version, "internal": internal,
-        "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12],
+        "rules_sha256": leaks.metrics["rules_sha256"],
     }
     cleanup.save()
     print_leaks(repo, data, found, version)
