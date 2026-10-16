@@ -49,12 +49,10 @@ MEASURE: tuple[Step, ...] = (
     ModuleGlobals(severity={"globals": "low"}),
     Suppressions(),
 )
-LEAKS = (
-    Betterleaks(severity={"credential": "critical", "possible-credential": "high", "internal-head": "high",
-                          "internal-history": "low"}),
-)
+LEAK_SCAN = Betterleaks(severity={"credential": "critical", "possible-credential": "high", "internal-head": "high",
+                                  "internal-history": "low"})
 ANALYZERS = tuple(t for t in MEASURE if t.package)  # the tools cleanup.py's script header pins
-ALL = (*LEAKS, *MEASURE)
+ALL = (LEAK_SCAN, *MEASURE)
 
 
 def scorecard_metrics() -> list:

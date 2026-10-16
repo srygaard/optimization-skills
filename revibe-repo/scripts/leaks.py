@@ -1,9 +1,9 @@
-"""`cleanup.py leaks`: the mandatory leak scan, Betterleaks over the full history."""
+"""`cleanup.py leaks`: the mandatory leak scan, over the full history once and over HEAD after that."""
 
 from pathlib import Path
 
 from state import Cleanup, Severity, merge, now
-from tools import LEAKS
+from tools import LEAK_SCAN
 from utils.git import git, head
 
 
@@ -20,21 +20,26 @@ def print_leaks(repo: Path, data: dict, found: list, scanners: str):
 
 
 def cmd_leaks(a):
-    """`cleanup.py leaks`: the leak scan over the full history, folded into issues.json."""
+    """`cleanup.py leaks`: the leak scan, folded into issues.json. It reads the full history the first time,
+    with `--history`, or when its rules changed, and only the files at HEAD otherwise."""
     cleanup = Cleanup(a.repo)
     repo = cleanup.repo
     data = cleanup.data
+    tool = LEAK_SCAN
+    last = data.get("leak_scan", {})
     # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
-    internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
-    results = [tool.scan(repo, internal) for tool in LEAKS]
-    found = [i for r in results for i in r.issues]
-    merge(data, found, {tool.name for tool in LEAKS})
-    scanned = {k: v for r in results for k, v in r.metrics.items()}  # each tool's version, by name; the rules' hash
-    versions = {tool.name: scanned[tool.name] for tool in LEAKS}
-    data["tools"].update(versions)
-    data["leak_scan"] = {"commit": head(repo), "date": now(), **scanned, "internal": internal}
+    internal = list(dict.fromkeys([*last.get("internal", []), *a.internal]))
+    known = [i for i in data["issues"] if i["source"] == tool.name]
+    result = tool.scan(repo, internal, {} if a.history else last, known)
+    merge(data, result.issues, {tool.name})
+    scanned = dict(result.metrics)  # its version, by name; the rules' hash; whether it read the history
+    read_history = scanned.pop("history")
+    data["tools"][tool.name] = scanned[tool.name]
+    data["leak_scan"] = {"commit": cleanup.commit, "date": now(), **scanned, "internal": internal,
+                         "history": cleanup.commit if read_history else last["history"]}  # the commit it last read
     cleanup.save()
-    print_leaks(repo, data, found, " ".join(f"{name} {v}" for name, v in versions.items()))
+    scope = "full history" if read_history else "HEAD"
+    print_leaks(repo, data, result.issues, f"{tool.name} {scanned[tool.name]}, {scope}")
     untracked = git(repo, "ls-files", "--others", "--exclude-standard").split()
     if untracked:
         print(f"warning: {len(untracked)} untracked files were not scanned (e.g. {untracked[0]}); "
