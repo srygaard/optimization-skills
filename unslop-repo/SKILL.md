@@ -30,7 +30,8 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
    See [safety-net.md](references/safety-net.md).
 4. **The user approves each phase** before work on it starts.
 5. **No nitpicks.** Only record or change something that makes the code meaningfully easier to
-   understand, use or change. A refactor that adds lines needs a reason.
+   understand, use or change. A refactor that adds lines needs a reason. Never pack code to save lines
+   (`a, b = f(), g()`, several statements on one line): LOC should fall because code is gone.
 
 ---
 
