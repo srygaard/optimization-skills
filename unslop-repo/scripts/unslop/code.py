@@ -141,54 +141,85 @@ def scb_check(repo, files, index) -> Result:
     return Result(out, metrics, notes={"violation_pct": "ast-grep did not run"} if "ast-grep" in p.stderr else None)
 
 
+LOCATED = ("erosion", "duplicate-structure", "trivial-wrapper", "low-use-short-function")
+WRAPPER_FLAGS = {"trivial-wrapper": "pass-through-method", "low-use-short-function": "shallow-module"}
+
+
 def scb_issues(text: str, src: Path, index, high_cc: int) -> list:
-    """Duplicate blocks, trivial wrappers and complex functions from scb-check's human output. Raises
+    """Trivial wrappers, duplicate blocks and complex functions from scb-check's human output. Raises
     ToolError when it doesn't parse as expected, so a changed format can't read as "all fixed"."""
-    clones, complex_fns, cognitive, out = [], [], {}, []
-    for f in parse_scb(text):
-        locs = [(rel(src, path), line) for path, line in f["locs"]]
-        if not locs and f["rule"] in ("erosion", "duplicate-structure", "trivial-wrapper", "low-use-short-function"):
+    findings = parse_scb(text)
+    for f in findings:
+        f["locs"] = [(rel(src, path), line) for path, line in f["locs"]]
+        if not f["locs"] and f["rule"] in LOCATED:
             raise ToolError(f"no location parsed for {f['rule']}: {f['msg'][:80]}")
-        size = next((m for n in f["notes"] if (m := SCB_CC.search(n))), None)
-        if f["rule"] in ("erosion", "cog_erosion") and size:
-            if f["rule"] == "erosion":
-                name = SCB_FUNCTION.search(f["msg"])
-                complex_fns.append((*locs[0], int(size[1]), int(size[2]), name[1] if name else "<function>"))
-            else:
-                cognitive[locs[0]] = int(size[1])
-        elif f["rule"] == "duplicate-structure" and (c := SCB_CLONE.search(f["msg"])):
-            clones.append((int(c[1]) * (int(c[2]) - 1), int(c[1]), int(c[2]), locs))
-        elif f["rule"] in ("trivial-wrapper", "low-use-short-function"):
-            file, line = locs[0]
-            name = (index.at_def_line(file, line) or (0, 0, "<module>"))[2]
-            flag ="pass-through-method" if f["rule"] == "trivial-wrapper" else "shallow-module"
-            out.append(issue(
-                "RF", "scb-check", "red-flag", flag, "wrapper", f"{f['rule']}: {f['msg']}",
-                file=file, symbol=name, line=line, evidence={"scb_rule": f["rule"]}, effort="S",
-                fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
-                     "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
-                done_when="scb-check no longer reports it (or it is dismissed), and the safety net passes."))
+    complex_fns = complexity_issues(findings, index)
     if len(complex_fns) != high_cc:
         raise ToolError(f"output not recognized: its JSON counts {high_cc} functions with CC > {CC_THRESHOLD}, "
                         f"{len(complex_fns)} were parsed")
-    for weight, lines, count, locs in clones:
+    return wrapper_issues(findings, index) + repetition_issues(findings, index) + complex_fns
+
+
+def wrapper_issues(findings: list, index) -> list:
+    """Ousterhout's pass-through methods and shallow modules, from scb-check's wrapper rules."""
+    out = []
+    for f in findings:
+        if f["rule"] not in WRAPPER_FLAGS:
+            continue
+        file, line = f["locs"][0]
+        out.append(issue(
+            "RF", "scb-check", "red-flag", WRAPPER_FLAGS[f["rule"]], "wrapper", f"{f['rule']}: {f['msg']}",
+            file=file, symbol=(index.at_def_line(file, line) or (0, 0, "<module>"))[2], line=line,
+            evidence={"scb_rule": f["rule"]}, effort="S",
+            fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
+                 "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
+            done_when="scb-check no longer reports it (or it is dismissed), and the safety net passes."))
+    return out
+
+
+def repetition_issues(findings: list, index) -> list:
+    """One issue per duplicate group, named after the functions that hold the copies."""
+    out = []
+    for f in findings:
+        if f["rule"] != "duplicate-structure" or not (c := SCB_CLONE.search(f["msg"])):
+            continue
+        lines, count, locs = int(c[1]), int(c[2]), f["locs"]
+        weight = lines * (count - 1)
         members = sorted({(file, index.qualname(file, line)) for file, line in locs})
-        where = ", ".join(f"{file}:{line}" for file, line in locs[:4])
+        places = [f"{file}:{line}" for file, line in locs]
         out.append(issue(
             "RF", "scb-check", "red-flag", "repetition",
             "repetition" if weight >= MEDIUM_DUP_LINES else "repetition-small",
-            f"{lines}-line block duplicated {count}x: {where}",
+            f"{lines}-line block duplicated {count}x: {', '.join(places[:4])}",
             key="RF|repetition|" + "|".join(f"{f}:{q}" for f, q in members),
             file=locs[0][0], line=locs[0][1], symbol=", ".join(q for _, q in members),
-            evidence={"lines": lines, "instances": count, "weight": weight,
-                      "locations": [f"{f}:{n}" for f, n in locs]},
+            evidence={"lines": lines, "instances": count, "weight": weight, "locations": places},
             effort="M" if lines >= 30 else "S",
             fix=("Extract the shared block into one function, or delete the copy that is no longer used. "
                  "Pass the real differences as a few parameters."),
             done_when="scb-check no longer reports this duplicate group and the safety net passes."))
-    for file, line, cc, sloc, name in complex_fns:
+    return out
+
+
+def _sized(findings: list, rule: str) -> list:
+    """(finding, complexity, SLOC) for each `rule` finding whose note gives the function's size."""
+    out = []
+    for f in findings:
+        m = next((m for n in f["notes"] if (m := SCB_CC.search(n))), None)
+        if f["rule"] == rule and m:
+            out.append((f, int(m[1]), int(m[2])))
+    return out
+
+
+def complexity_issues(findings: list, index) -> list:
+    """One issue per function over the CC threshold, with its cognitive complexity as evidence."""
+    cognitive = {f["locs"][0]: cc for f, cc, _ in _sized(findings, "cog_erosion")}
+    out = []
+    for f, cc, sloc in _sized(findings, "erosion"):
+        file, line = f["locs"][0]
         d = index.at_def_line(file, line)
-        qual, start, end = (d[2], d[0], d[1]) if d else (name, line, line)
+        name = SCB_FUNCTION.search(f["msg"])
+        qual, start, end = (d[2], d[0], d[1]) if d else (name[1] if name else "<function>", line, line)
         mass = cc * math.sqrt(sloc)
         evidence = {"cc": cc, "sloc": sloc, "mass": round(mass, 1), "weight": round(mass, 1)}
         if (file, line) in cognitive:
