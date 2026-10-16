@@ -4,7 +4,8 @@ Each red flag is a symptom of complexity. Record one only if fixing it would mak
 easier to understand, use or change. A flag on code that is about to be deleted is not worth recording.
 
 **Found automatically** by `measure` (via scb-check): **Repetition** (duplicated blocks of 10+ lines),
-**Pass-Through Method** (`trivial-wrapper`), **Shallow Module** (`low-use-short-function`).
+**Pass-Through Method** (`trivial-wrapper`), **Shallow Module** (`low-use-short-function`), and
+**Nonobvious Code** as magic numbers (by `ast`).
 **The rest come from your review** of the exposed code and the files holding medium issues.
 
 | flag | how it shows up in ML research code | typical fix | severity |

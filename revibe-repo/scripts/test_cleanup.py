@@ -164,6 +164,14 @@ def offline():
               "[y for y in range(2)]\ndef f():\n    global G\n    G = 1\n    local = 2\nclass C:\n    attr = 1\n")
     check(scope.module_globals(ast.parse(module)) == ["A", "B", "G", "i", "x"],
           "globals are the names bound at module level or declared `global`, not locals, class attributes or dunders")
+    code = ("SHAPE = (3, 224)\n"
+            "def f(x, eps=1e-6):\n"
+            "    y = x[:, 3] * 0.1\n"
+            "    z = g(x, 7, scale=4, opts={'k': 9})\n"
+            "    return y - 1 + 2 + -1\n")
+    magic = created["magic-numbers"].magic_numbers(ast.parse(code))
+    check(sorted(v for _, v in magic) == [0.1, 3, 7],
+          "magic numbers are unnamed literals: not assigned, defaults, keyword arguments, dict values or -1/0/1/2")
 
     with tempfile.TemporaryDirectory() as tmp:
         def load(text):
@@ -401,6 +409,8 @@ def end_to_end():
               and metrics["files_over_1000_code_lines"] == 1 and metrics["files_over_500_code_lines"] == 1
               and metrics["avg_code_lines"] > 0,
               "a module of 1001 code lines -> medium 'split it' issue, counted with the average file length")
+        check(one("red-flag", "magic-numbers", symbol="route", severity="medium") and metrics["magic_numbers"] > 0,
+              "a function with many unnamed numbers -> medium magic-numbers issue, and a scorecard count")
         check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
               "module-level globals -> one low issue, and a scorecard count")
         if "pip-audit" in at_head()["not_measured"]:

@@ -12,6 +12,7 @@ from tools.deptry import Deptry
 from tools.file_length import FileLength
 from tools.large_files import LargeFiles
 from tools.license import License
+from tools.magic_numbers import MagicNumbers
 from tools.module_globals import ModuleGlobals
 from tools.pip_audit import PipAudit
 from tools.scb_check import ScbCheck
@@ -49,6 +50,10 @@ MEASURE: tuple[Step, ...] = (
         },
     ),
     ModuleGlobals(severity={"globals": "low"}),
+    MagicNumbers(
+        severity={"magic-function": "medium", "magic-numbers": "low"},
+        settings={"medium_magic": 5},  # distinct unnamed numbers from which a function is medium
+    ),
     Suppressions(),
 )
 LEAK_SCAN = Betterleaks(severity={"credential": "critical", "possible-credential": "high", "internal-head": "high",
