@@ -175,7 +175,7 @@ def severity_rules() -> list:
     """Every tool's policy as a list, so an agent working from the report sees why each issue has its severity."""
     rows = policies().values()
     return ["", "## Severity rules", "",
-            "Set by each tool's `TOOL` policy in tools/; red flags and bugs you add keep the severity you "
+            "Set where tools/__init__.py creates each tool; red flags and bugs you add keep the severity you "
             "give them.", "",
             *(f"- **{sev.name}:** " + "; ".join(when for s, when in rows if s == sev.name) for sev in Severity)]
 

@@ -81,8 +81,9 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 | **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
-The exact rules are the `policy` of each tool's `TOOL` in `scripts/tools/`, the one place its
-severities are set, and the thresholds they use are its `settings`. Every report.md ends with them, so an agent working from the report sees them too.
+The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
+severity of every kind of finding it reports and the thresholds they use; the tool's class says what each
+kind covers. Every report.md ends with them, so an agent working from the report sees them too.
 
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
 older than HEAD.
@@ -153,15 +154,20 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 ## 5. The script
 
 `scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
-scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Each tool's `TOOL` names the same
+scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Each tool's class names the same
 version (a test keeps them equal), and `measure` stops if another one is installed. The modules it
-imports sit next to it:
-`state` (issues.json, its severity scale and the snapshots), `scope` (the files in scope), `leaks`,
-`measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module per purpose). Each tool module starts with its `TOOL`
-(name, PyPI package, settings, severity policy, scorecard metrics), then runs the tool and turns what it finds into issues;
-`tools/base.py` defines `Tool`, which builds every issue, the `Result` every tool returns, and `Step`, the
-protocol of a measure step: `measure(scope) -> Result`, where the `Scope` (`scope.py`) holds the repo, the
-files in scope and what they define. The leak tools have `scan` instead.
+imports sit next to it: `state` (issues.json, its severity scale and the snapshots), `scope` (the files
+in scope), `leaks`, `measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module
+per purpose).
+
+Each tool module defines a class: the tool's name, PyPI package and pinned version, what each kind of
+finding covers (`policy`), its scorecard metrics, and the methods that run it and turn what it finds into
+issues. `tools/__init__.py` creates every tool with its severities and settings, and a tool refuses
+severities that don't match its policy. `tools/base.py` defines `Tool`, which builds every issue, the
+`Result` every tool returns, and `Step`, the base of a measure step, `measure(scope) -> Result`; the
+`Scope` (`scope.py`) holds the repo, the files in scope and what they define. Betterleaks, the leak
+scan, has `scan` instead.
+
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
 `tools/pip_audit.py` when bumping it); deptry runs as `python -m deptry`, since its API exits the
 process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it

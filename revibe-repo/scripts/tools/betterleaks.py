@@ -19,24 +19,130 @@ from utils.git import git
 from utils.process import run
 from tools.base import Result, Tool
 
-TOOL = Tool(
-    name="betterleaks",
-    policy={
-        "credential": ("critical", "credential matched by a confident rule, at HEAD or only in history"),
-        "possible-credential": ("high", "possible credential (low-confidence rule or sensitive file name)"),
-        "internal-head": ("high", "internal path, host, email or account at HEAD"),
-        "internal-history": ("low", "internal reference only in history: a fresh squashed history drops it"),
-    },
-    version="1.9.0",  # not on PyPI: the release binary is pinned here, with its checksums
-    settings={
-        "sha256": {  # checksums.txt of the v1.9.0 release, signature verified with sigstore
-            ("darwin", "arm64"): "83dd7eaab13d44a1e8e347a17064cdef153a1478db473276d41b38d55613d3f2",
-            ("darwin", "x64"): "68dfd83458d9e7f90663daa7a81c7f944083b170dae82e4f5f8d0581ed519ef1",
-            ("linux", "arm64"): "1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b",
-            ("linux", "x64"): "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7",
-        },
-    },
-)
+
+class Betterleaks(Tool):
+    """Credentials and internal references anywhere in the git history."""
+
+    name = "betterleaks"
+    version = "1.9.0"  # not on PyPI: the release binary is pinned here, with its checksums
+    sha256 = {  # checksums.txt of the v1.9.0 release, signature verified with sigstore
+        ("darwin", "arm64"): "83dd7eaab13d44a1e8e347a17064cdef153a1478db473276d41b38d55613d3f2",
+        ("darwin", "x64"): "68dfd83458d9e7f90663daa7a81c7f944083b170dae82e4f5f8d0581ed519ef1",
+        ("linux", "arm64"): "1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b",
+        ("linux", "x64"): "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7",
+    }
+    policy = {
+        "credential": "credential matched by a confident rule, at HEAD or only in history",
+        "possible-credential": "possible credential (low-confidence rule or sensitive file name)",
+        "internal-head": "internal path, host, email or account at HEAD",
+        "internal-history": "internal reference only in history: a fresh squashed history drops it",
+    }
+
+    def tarball_ok(self, data: bytes, os_name: str, arch: str) -> bool:
+        return hashlib.sha256(data).hexdigest() == self.sha256.get((os_name, arch))
+
+    def executable(self) -> Path:
+        if env := os.environ.get("BETTERLEAKS"):
+            exe = Path(env).expanduser()
+            if not (exe.is_file() and os.access(exe, os.X_OK)):
+                raise SystemExit(f"BETTERLEAKS={env} is not an executable file")
+            return exe
+        os_name, arch = _platform()
+        if (os_name, arch) not in self.sha256:
+            raise SystemExit(f"no pinned Betterleaks build for {sys.platform}/{platform.machine()}; "
+                "set BETTERLEAKS=/path/to/betterleaks")
+        cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+        version = self.version
+        cache = cache / "revibe-repo" / f"betterleaks-{version}"
+        exe = cache / "betterleaks"
+        if exe.is_file():
+            return exe
+        name = f"betterleaks_{version}_{os_name}_{arch}.tar.gz"
+        print(f"fetching {name} (once) ...", file=sys.stderr)
+        data = _download(f"https://github.com/betterleaks/betterleaks/releases/download/v{version}/{name}")
+        if not self.tarball_ok(data, os_name, arch):
+            raise SystemExit(f"SHA-256 mismatch for {name}: refusing to run it")
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            member = tar.getmember("betterleaks")
+            if not member.isfile():
+                raise SystemExit(f"{name} does not contain a betterleaks binary")
+            blob = tar.extractfile(member).read()
+        cache.mkdir(parents=True, exist_ok=True)
+        part = cache / "betterleaks.part"
+        part.write_bytes(blob)
+        part.chmod(0o755)
+        part.replace(exe)
+        return exe
+
+    def internal_issue(self, g: dict) -> dict:
+        rule, at = located(g)
+        here = at["evidence"]["at_head"]
+        more = f" and {len(g['matches']) - 1} more" if len(g["matches"]) > 1 else ""
+        at["evidence"]["matches"] = sorted(g["matches"])[:20]
+        return self.issue(
+            "INT", "internal-ref", rule, "internal-head" if here else "internal-history",
+            f"Internal reference `{g['preview']}`{more} ({'at HEAD' if here else 'only in history'})",
+            key=f"INT|{hashlib.sha256(g['basis'].encode()).hexdigest()}", **at,
+            fix=("Replace it with a config value, CLI argument or environment variable "
+                 "(or a neutral placeholder in docs)." if here else
+                 "Only matters if the history is published; a fresh squashed history drops it."),
+            done_when="`cleanup.py leaks` no longer reports it at HEAD.")
+
+    def credential_issue(self, g: dict) -> dict:
+        rule, at = located(g)
+        here = at["evidence"]["at_head"]
+        # IDs come from facts about the finding, never from the secret: a hash of a short password next to its
+        # prefix and length could be brute-forced offline
+        key = "|".join(map(str, g["first"][1:])) if g["needles"] else hashlib.sha256(g["basis"].encode()).hexdigest()
+        certain = g["rules"][rule] in ("high", "medium")
+        if certain:
+            fix = ("User: revoke/rotate this credential at its provider first. "
+                   + ("Then read it from an environment variable (add a `.env.example`, gitignore `.env`) "
+                      "and keep it out of the published history: publish a fresh squashed history, or "
+                      "rewrite history with the user's approval." if here else
+                      "It is gone from HEAD but still in history: publish a fresh squashed history, or "
+                      "rewrite history with the user's approval.")
+                   + " The scan keeps finding it in the local history, so then dismiss this issue with a note "
+                     "saying it was rotated and how history is handled.")
+        else:
+            fix = ("Check whether this is a real credential by looking at the location; never print the "
+                   "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
+                   "any secret.")
+        return self.issue(
+            "LEAK", "leak", rule, "credential" if certain else "possible-credential",
+            f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} "
+            f"({'at HEAD' if here else 'only in history'})",
+            key=f"LEAK|{key}", **at, fix=fix,
+            done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled.")
+
+    def leak_issues(self, repo: Path, findings: list, tmp: Path) -> list:
+        """One issue per group of Betterleaks findings. Plaintext stays in the groups."""
+        groups = group_findings(findings)
+        find_at_head(repo, groups, tmp)
+        return [self.internal_issue(g) if g["internal"] else self.credential_issue(g) for g in groups.values()]
+
+    def scan(self, repo: Path, internal: list) -> Result:
+        """Betterleaks over every commit, as issues, with the version and the rules (`--internal` patterns included)
+        it ran."""
+        exe = self.executable()
+        version = run([exe, "version"]).stdout.strip() or "?"
+        rules = rule_set(internal)
+        with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
+            config = Path(tmp, "rules.toml")
+            report = Path(tmp, "report.json")
+            mirror = Path(tmp, "scan.git")
+            config.write_text(rules)
+            # Trust neither allow comments nor the repo's ignore files: a key waved past a pre-commit hook is what
+            # this scan is for, and dismissals live in issues.json. Betterleaks reads ignore files from the root
+            # of the repo it scans, so it scans a bare mirror (--shared copies no objects); tmp has none either.
+            git(repo, "clone", "--quiet", "--mirror", "--shared", str(repo), str(mirror))
+            p = run([exe, "git", mirror, "--config", config, "--report-format", "json", "--report-path", report,
+                     "--exit-code", "0", "--no-banner", "--no-color", "--log-level", "error",
+                     "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
+            if p.returncode or not report.exists():
+                raise SystemExit(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
+            issues = self.leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
+        return Result(issues, {self.name: version, "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12]})
 
 # --- the binary ------------------------------------------------------------------------------------
 
@@ -46,10 +152,6 @@ def _platform() -> tuple:
     machine = platform.machine().lower()
     arch = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine)
     return os_name, arch
-
-
-def tarball_ok(data: bytes, os_name: str, arch: str) -> bool:
-    return hashlib.sha256(data).hexdigest() == TOOL.settings["sha256"].get((os_name, arch))
 
 
 def _download(url: str) -> bytes:
@@ -65,40 +167,6 @@ def _download(url: str) -> bytes:
             "and set BETTERLEAKS=/path/to/betterleaks")
 
 
-def executable() -> Path:
-    if env := os.environ.get("BETTERLEAKS"):
-        exe = Path(env).expanduser()
-        if not (exe.is_file() and os.access(exe, os.X_OK)):
-            raise SystemExit(f"BETTERLEAKS={env} is not an executable file")
-        return exe
-    os_name, arch = _platform()
-    if (os_name, arch) not in TOOL.settings["sha256"]:
-        raise SystemExit(f"no pinned Betterleaks build for {sys.platform}/{platform.machine()}; "
-            "set BETTERLEAKS=/path/to/betterleaks")
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    version = TOOL.version
-    cache = cache / "revibe-repo" / f"betterleaks-{version}"
-    exe = cache / "betterleaks"
-    if exe.is_file():
-        return exe
-    name = f"betterleaks_{version}_{os_name}_{arch}.tar.gz"
-    print(f"fetching {name} (once) ...", file=sys.stderr)
-    data = _download(f"https://github.com/betterleaks/betterleaks/releases/download/v{version}/{name}")
-    if not tarball_ok(data, os_name, arch):
-        raise SystemExit(f"SHA-256 mismatch for {name}: refusing to run it")
-    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-        member = tar.getmember("betterleaks")
-        if not member.isfile():
-            raise SystemExit(f"{name} does not contain a betterleaks binary")
-        blob = tar.extractfile(member).read()
-    cache.mkdir(parents=True, exist_ok=True)
-    part = cache / "betterleaks.part"
-    part.write_bytes(blob)
-    part.chmod(0o755)
-    part.replace(exe)
-    return exe
-
-
 def _internal_rule(n: int, regex: str) -> str:
     if "'''" in regex:
         raise SystemExit("--internal patterns cannot contain '''")
@@ -112,7 +180,6 @@ def rule_set(internal: list) -> str:
 
 
 # --- findings to issues ----------------------------------------------------------------------------
-
 
 
 def preview(secret: str) -> str:
@@ -185,77 +252,3 @@ def located(g: dict) -> tuple:
         "first_commit": g["first"][1][:12], "first_date": g["first"][0],
         "occurrences": len(g["locs"]), "locations": g["locs"][:10], "fingerprints": g["fingerprints"][:10],
     }}
-
-
-def internal_issue(g: dict) -> dict:
-    rule, at = located(g)
-    here = at["evidence"]["at_head"]
-    more = f" and {len(g['matches']) - 1} more" if len(g["matches"]) > 1 else ""
-    at["evidence"]["matches"] = sorted(g["matches"])[:20]
-    return TOOL.issue(
-        "INT", "internal-ref", rule, "internal-head" if here else "internal-history",
-        f"Internal reference `{g['preview']}`{more} ({'at HEAD' if here else 'only in history'})",
-        key=f"INT|{hashlib.sha256(g['basis'].encode()).hexdigest()}", **at,
-        fix=("Replace it with a config value, CLI argument or environment variable "
-             "(or a neutral placeholder in docs)." if here else
-             "Only matters if the history is published; a fresh squashed history drops it."),
-        done_when="`cleanup.py leaks` no longer reports it at HEAD.")
-
-
-def credential_issue(g: dict) -> dict:
-    rule, at = located(g)
-    here = at["evidence"]["at_head"]
-    # IDs come from facts about the finding, never from the secret: a hash of a short password next to its
-    # prefix and length could be brute-forced offline
-    key = "|".join(map(str, g["first"][1:])) if g["needles"] else hashlib.sha256(g["basis"].encode()).hexdigest()
-    certain = g["rules"][rule] in ("high", "medium")
-    if certain:
-        fix = ("User: revoke/rotate this credential at its provider first. "
-               + ("Then read it from an environment variable (add a `.env.example`, gitignore `.env`) "
-                  "and keep it out of the published history: publish a fresh squashed history, or "
-                  "rewrite history with the user's approval." if here else
-                  "It is gone from HEAD but still in history: publish a fresh squashed history, or "
-                  "rewrite history with the user's approval.")
-               + " The scan keeps finding it in the local history, so then dismiss this issue with a note "
-                 "saying it was rotated and how history is handled.")
-    else:
-        fix = ("Check whether this is a real credential by looking at the location; never print the "
-               "value. If it is not, dismiss it with the reason. If it is, rotate it and remove it as for "
-               "any secret.")
-    return TOOL.issue(
-        "LEAK", "leak", rule, "credential" if certain else "possible-credential",
-        f"{'Secret' if certain else 'Possible secret'} `{g['preview']}` matched {rule} "
-        f"({'at HEAD' if here else 'only in history'})",
-        key=f"LEAK|{key}", **at, fix=fix,
-        done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled.")
-
-
-def leak_issues(repo: Path, findings: list, tmp: Path) -> list:
-    """One issue per group of Betterleaks findings. Plaintext stays in the groups."""
-    groups = group_findings(findings)
-    find_at_head(repo, groups, tmp)
-    return [internal_issue(g) if g["internal"] else credential_issue(g) for g in groups.values()]
-
-
-def scan(repo: Path, internal: list) -> Result:
-    """Betterleaks over every commit, as issues, with the version and the rules (`--internal` patterns included)
-    it ran."""
-    exe = executable()
-    version = run([exe, "version"]).stdout.strip() or "?"
-    rules = rule_set(internal)
-    with tempfile.TemporaryDirectory(prefix="cleanup-leaks-") as tmp:
-        config = Path(tmp, "rules.toml")
-        report = Path(tmp, "report.json")
-        mirror = Path(tmp, "scan.git")
-        config.write_text(rules)
-        # Trust neither allow comments nor the repo's ignore files: a key waved past a pre-commit hook is what
-        # this scan is for, and dismissals live in issues.json. Betterleaks reads ignore files from the root
-        # of the repo it scans, so it scans a bare mirror (--shared copies no objects); tmp has none either.
-        git(repo, "clone", "--quiet", "--mirror", "--shared", str(repo), str(mirror))
-        p = run([exe, "git", mirror, "--config", config, "--report-format", "json", "--report-path", report,
-                 "--exit-code", "0", "--no-banner", "--no-color", "--log-level", "error",
-                 "--ignore-gitleaks-allow", "--gitleaks-ignore-path", tmp])
-        if p.returncode or not report.exists():
-            raise SystemExit(f"betterleaks failed (exit {p.returncode}): {p.stderr.strip()[-400:]}")
-        issues = leak_issues(repo, json.loads(report.read_text() or "[]"), Path(tmp))
-    return Result(issues, {"version": version, "rules_sha256": hashlib.sha256(rules.encode()).hexdigest()[:12]})
