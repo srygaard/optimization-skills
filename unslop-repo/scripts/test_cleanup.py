@@ -12,17 +12,22 @@ The end-to-end run builds a throwaway repo with one known instance of each findi
 and internal references are assembled at runtime, so the leak scan doesn't flag this file.
 """
 
+import ast
 import hashlib
 import json
 import random
+import re
 import string
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
-from unslop import code, common, leaks, measure, project, state
+from unslop import common, measure, scope, state, tools
+from unslop.tools import betterleaks, deptry, scb_check, vulture
+from unslop.tools.base import Result, Tool
 
 CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
 failures = []
@@ -36,62 +41,23 @@ def check(cond, what):
 
 # --- offline ---------------------------------------------------------------------------------------
 
-# Recorded scb-check 0.2.0 output (paths shortened): the parser's contract with the pinned version.
-SCB_SAMPLE = """\
-trivial-wrapper[warning]: `disabled_train` adds no behavior
-   ┌─ /r/ldm/models/diffusion/classifier.py:22:1
-   │
-21 │
-22 │ def disabled_train(self, mode=True):
-   │
-
-duplicate-structure: duplicated block (17 lines, 2 instances)
-    ┌─ /r/ldm/models/diffusion/classifier.py:70
-    │
- 70 │     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-    │
-    ┆
-    ┌─ /r/ldm/models/diffusion/ddpm.py:186
-    │
-186 │     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-    │
-
-erosion: function `apply_model` exceeds complexity threshold
-    ┌─ /r/ldm/models/diffusion/ddpm.py:891
-    │
-890 │
-891 │     def apply_model(self, x_noisy, t, cond, return_ids=False):
-892 │
-    │
-    = complexity: 25, sloc: 68 (threshold: complexity > 10)
-
-warning[except-pass-silence]: except clause with bare pass silently swallows errors
-    ┌─ /r/ldm/util.py:769:9
-    │
-"""
-
-
 def offline():
     print("offline")
-    found = code.parse_scb(SCB_SAMPLE)
-    check([f["rule"] for f in found] == ["trivial-wrapper", "duplicate-structure", "erosion", "except-pass-silence"],
-          "scb-check findings are parsed")
-    check(found[1]["locs"] == [("/r/ldm/models/diffusion/classifier.py", 70), ("/r/ldm/models/diffusion/ddpm.py", 186)],
-          "every instance of a duplicate block keeps its location")
-    check(found[2]["notes"] == ["complexity: 25, sloc: 68 (threshold: complexity > 10)"],
-          "a function's complexity and SLOC are parsed from its note line")
-
-    check(code.matches("tests/test_a.py", "tests/**") and not code.matches("pkg/tests/a.py", "tests/**"),
+    check(scope.matches("tests/test_a.py", "tests/**") and not scope.matches("pkg/tests/a.py", "tests/**"),
           "'tests/**' matches only the top-level tests/")
-    check(code.matches("a/b/test_x.py", "**/test_*.py") and code.matches("test_x.py", "**/test_*.py"),
+    check(scope.matches("a/b/test_x.py", "**/test_*.py") and scope.matches("test_x.py", "**/test_*.py"),
           "'**/' matches any depth, including none")
-    check(not leaks.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
+    check(not betterleaks.tarball_ok(b"tampered", "darwin", "arm64"), "a tampered Betterleaks download is refused")
 
-    check(all(sev in common.SEVERITIES and when for sev, when in common.POLICY.values()), "every POLICY row has a severity")
+    rows = tools.policies()
+    check(all(sev in common.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
+    check(len(rows) == sum(len(m.TOOL.policy) for m in tools.ALL), "no policy key is set by two tools")
+    pinned = set(re.findall(r'"([\w.-]+)==', CLEANUP.read_text().split("# ///")[1]))
+    check(pinned == {m.TOOL.package for m in tools.ANALYZERS}, "cleanup.py's header pins exactly the analyzers' packages")
 
     def cx(symbol, policy="complex", **kw):
-        return state.issue("CX", "scb-check", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
-                       symbol=symbol, **kw)
+        return scb_check.TOOL.issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
+                                    symbol=symbol, **kw)
 
     data = {"issues": []}
     state.merge(data, [cx("f"), cx("g")], {"scb-check"})
@@ -113,30 +79,13 @@ def offline():
     check(get["g"]["status"] == "open" and "refactored" in get["g"]["note"],
           "an issue an agent marked fixed reopens while the tool still detects it, keeping the agent's note")
 
-    empty = code.CodeIndex(Path("/r"), [])
-    issues = code.scb_issues(SCB_SAMPLE, Path("/r"), empty, high_cc=1)
-    check(sorted(i["category"] for i in issues) == ["complexity", "red-flag", "red-flag"],
-          "scb-check output becomes a complexity issue, a wrapper and a duplicate group")
-    raised = []
-    for args in ((SCB_SAMPLE, Path("/r"), empty, 2), (SCB_SAMPLE.replace("┌─", "--"), Path("/r"), empty, 1)):
-        try:
-            code.scb_issues(*args)
-        except common.ToolError:
-            raised.append(True)
-    check(len(raised) == 2, "scb-check output that doesn't match its JSON totals or format is an error, not 'clean'")
-    row = "pkg/a.py:5: unused function 'helper' (60% confidence, 5 lines)"
-    check(code.vulture_rows(row + "\n")[0]["name"] == "helper", "vulture lines are parsed")
-    try:
-        code.vulture_rows(row + "\nsomething vulture never printed before\n")
-        check(False, "an unrecognized vulture line is an error")
-    except common.ToolError:
-        check(True, "an unrecognized vulture line is an error")
+    step_a = Tool("a", {"x": ("low", "a test row")})
 
     def ok(repo, files, index):
-        return common.Result([cx("h")], {"m": 1})
+        return Result([step_a.issue("T", "bug", "x", "x", "found by a")], {"m": 1})
 
     def nothing_to_read(repo, files, index):
-        return common.Result([], {}, skipped="no lockfile")
+        return Result([], {}, skipped="no lockfile")
 
     def broken(repo, files, index):
         raise KeyError("total_loc")
@@ -154,31 +103,36 @@ def offline():
          ["contperceptual", "losses", "modules", "ldm"], True, False),  # re-exported by losses/__init__.py
         (("utils.py", "# matlab 'imresize' function\n", True), "imresize", ["utils"], False, True),
     ]
-    results = [code._named_in([ref], name, module) for ref, name, module, _, _ in cases]
+    results = [vulture._named_in([ref], name, module) for ref, name, module, _, _ in cases]
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
               for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
 
     with tempfile.TemporaryDirectory() as tmp:
-        none = project.deptry_deps(Path(tmp), [], None)
+        none = deptry.measure(Path(tmp), [], None)
         Path(tmp, "tool.py").write_text("# /// script\n# dependencies = []\n# ///\n")
-        inline = project.deptry_deps(Path(tmp), ["tool.py"], None)
+        inline = deptry.measure(Path(tmp), ["tool.py"], None)
         check(none.issues[0]["severity"] == "high" and inline.issues[0]["severity"] == "low" and none.skipped,
               "no dependency list at all is high; PEP 723 blocks deptry can't read are low")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
                                        "    def m(self):\n        return 2\n")
-        index = code.CodeIndex(Path(tmp), ["mod.py"])
-        check(code.runtime_lines(index, "mod.py", 4) == {5} and code.runtime_lines(index, "mod.py", 8) == {12},
+        index = scope.CodeIndex(Path(tmp), ["mod.py"])
+        check(vulture.runtime_lines(index, "mod.py", 4) == {5} and vulture.runtime_lines(index, "mod.py", 8) == {12},
               "coverage counts function and method bodies, not def or class-body lines that run on import")
+
+    module = ("A = 1\nx: int = 2\n__all__ = []\nif True:\n    B = 3\nfor i in range(3):\n    pass\n"
+              "[y for y in range(2)]\ndef f():\n    global G\n    G = 1\n    local = 2\nclass C:\n    attr = 1\n")
+    check(scope.module_globals(ast.parse(module)) == ["A", "B", "G", "i", "x"],
+          "globals are the names bound at module level or declared `global`, not locals, class attributes or dunders")
 
     with tempfile.TemporaryDirectory() as tmp:
         def load(text):
             (Path(tmp) / "issues.json").write_text(text)
             try:
                 return state.load_issues(Path(tmp))
-            except common.CleanupError as e:
+            except SystemExit as e:
                 return str(e)
 
         bug = {"id": "BUG-A1", "category": "bug", "severity": "high", "summary": "found while reading"}
@@ -193,7 +147,9 @@ def offline():
         check(isinstance(error, str) and "not valid JSON (line 1" in error, "broken JSON stops the command with its line")
 
     found, metrics, not_measured, measured = measure.run_steps(None, [], None, steps=(
-        ("a", ok), ("b", nothing_to_read), ("c", broken)))
+        SimpleNamespace(TOOL=step_a, measure=ok),
+        SimpleNamespace(TOOL=Tool("b", {}), measure=nothing_to_read),
+        SimpleNamespace(TOOL=Tool("c", {}), measure=broken)))
     check(measured == {"a"} and set(not_measured) == {"b", "c"} and metrics == {"m": 1},
           "a skipped or broken step is not measured, and the other steps still count")
     check(found[0]["source"] == "a", "issues carry the name of the step that found them")
@@ -215,6 +171,7 @@ def build_repo(root: Path) -> dict:
                "allowed": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}
     # split so this file scans clean
     sbatch = "#SB" + "ATCH"
+    account = "rrg" + "-someprof"
     mila = "/net" + "work/scratch/s/student/data"
 
     repo = root / "repo"
@@ -283,8 +240,7 @@ def normalize_b(rows):
         out.append(row)
     return out
 """)
-    write("pkg/vendored.py", "# Copyright 2020 Other Org\n# Licensed under the Apache License, Version 2.0\n\n"
-          "def borrowed(x):\n    return x\n")
+    write("pkg/vendored.py", "def borrowed(x):\n    return x\n")
     write("pkg/main.py", "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.shared import dispatch\n"
           "from pkg.vendored import borrowed\n\n\n"
           "def main():\n    print(route('k1', 1), normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2))\n\n\n"
@@ -299,7 +255,7 @@ def normalize_b(rows):
     write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
-    write("train.sh", f"#!/bin/bash\n{sbatch} --account=rrg-someprof\npython -m pkg.main --data {mila}\n")
+    write("train.sh", f"#!/bin/bash\n{sbatch} --account={account}\npython -m pkg.main --data {mila}\n")
     (repo / "data").mkdir()
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
@@ -316,7 +272,7 @@ def end_to_end():
     transcript = []
 
     def cli(*args):
-        p = subprocess.run([sys.executable, str(CLEANUP), *args], capture_output=True, text=True)
+        p = subprocess.run(["uv", "run", "--quiet", "--script", str(CLEANUP), *args], capture_output=True, text=True)
         transcript.append(p.stdout + p.stderr)
         return p
 
@@ -353,7 +309,6 @@ def end_to_end():
         check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
               "6 MB file, moved since -> high, at its path at HEAD")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
-        check(one("license", "third-party-license", severity="high"), "vendored Apache header -> high")
         check(one("dead-code", "function", symbol="unused_helper", status="open"), "dead function -> open")
         check(one("dead-code", "class", symbol="ConfigOnlyModel", status="dismissed"),
               "class named only in yaml `target:` -> dismissed")
@@ -371,6 +326,8 @@ def end_to_end():
         check(one("file-length", "long-file", file="pkg/constants.py", severity="medium")
               and metrics["files_over_1000"] == 1 and metrics["files_over_500"] == 1 and metrics["avg_file_lines"] > 0,
               "a 1001-line module -> medium 'split it' issue, counted with the average file length")
+        check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
+              "module-level globals -> one low issue, and a scorecard count")
         if "pip-audit" in json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["not_measured"]:
             print("  skip pip-audit check (offline?)")
         else:

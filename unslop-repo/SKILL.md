@@ -6,7 +6,7 @@ description: >-
   tracking a refactor with before/after numbers. Also for checking a repo for leaked secrets and API
   keys (W&B, Hugging Face, OpenAI, Anthropic, AWS, GitHub) anywhere in git history, internal
   cluster paths, hostnames and SLURM accounts (Mila, DRAC), large checkpoints or data in history, a
-  missing LICENSE, vendored code under another license, undeclared or vulnerable dependencies
+  missing LICENSE or README, undeclared or vulnerable dependencies
   (deptry, pip-audit), dead code (vulture), cyclomatic complexity, duplication, code sloppiness
   metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
   from Ousterhout's "A Philosophy of Software Design". Produces .cleanup/report.md, which another
@@ -58,17 +58,28 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 - `--exclude GLOB` on `measure` leaves paths out of the metrics. Tests and docs are excluded by default,
   so adding a safety net doesn't move the numbers. Keep the same excludes for every snapshot.
 
+**While refactoring** (report.md repeats these):
+- If a file holds many pure functions, consider organizing them into classes.
+- If a function returns a tuple, consider making it a named tuple, so callers read fields by name.
+- If a function or method you touch has no docstring, add one sentence explaining its purpose.
+- Avoid introducing new globals: keep a constant next to its only user, and pass state as arguments.
+  The scorecard counts module-level globals, and `compare` warns when the count goes up.
+- Avoid catch-all modules such as `common.py` or `utils.py`. Put helpers in a `utils/` package with
+  one module per purpose, e.g. `utils/paths.py`, `utils/timing.py`, `utils/git.py`. Never give a
+  module the name of a standard-library module (`time.py`, `json.py`, `logging.py`, `types.py`): it
+  shadows the library whenever its folder is on `sys.path`, as it is when a script there runs.
+
 ## 2. Severity decides the phase
 
 | severity | meaning | for example | phase |
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
-| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; license problems; fixable vulnerabilities; missing dependencies or README | High |
+| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
 | **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, big files in history, red flags you add | Medium |
-| **low** | optional | smaller complexity and duplication, small dead code, other history-only findings, unused deps, no lockfile | Low |
+| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other history-only findings, unused deps, no lockfile | Low |
 
-The exact rules and thresholds are `POLICY` in `scripts/unslop/common.py`, the one place severities are set.
-Every report.md ends with them, so an agent working from the report sees them too.
+The exact rules are the `policy` of each tool's `TOOL` in `scripts/unslop/tools/`, the one place its
+severities are set, and the thresholds they use are its `settings`. Every report.md ends with them, so an agent working from the report sees them too.
 
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
 older than HEAD.
@@ -120,13 +131,15 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 | Red flags open, Leaks open | issues.json | counts of open issues |
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
 | Avg file length, Files > 500 / > 1000 lines | line count | lines per source file. A file over 1000 lines gets a medium issue: split it into modules that each own one concept |
+| Globals | `ast` | names a module binds outside its functions and classes, constants included, plus names declared `global`. One low issue holds the count and the files with the most |
 
 - **Reference ranges** from SlopCodeBench (arXiv 2603.24755): maintained human Python repos average
   Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68. They are for orientation, not targets.
   scb-check 0.2.0 measures Violation % and Clone Ratio differently from the paper, so those two have no
   reference.
 - **Ratios can rise when you delete clean code.** `compare` warns on absolute amounts instead: verbosity-
-  flagged LOC, mass in high-CC functions, suppressions. A warning after a refactor means it added slop.
+  flagged LOC, mass in high-CC functions, suppressions, files over 1000 lines, module-level globals. A
+  warning after a refactor means it added slop.
 - **Erosion and verbosity predict maintenance cost, not bugs** (paper, Appendix G). Net LOC is the
   simplest honest signal: most cleanup commits should delete more than they add.
 - **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues.
@@ -136,21 +149,24 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 
 ## 5. The script
 
-`scripts/cleanup.py` is the only entry point, a PEP 723 script using only the stdlib. Its code lives in
-`scripts/unslop/`, one module per concern: `common` (pins, thresholds, `POLICY`), `state` (issues.json
-and snapshots), `leaks`, `code` (scope, scb-check, vulture), `project` (dependencies, license, file
-length), `measure` and `report`. The analyzers run through pinned `uvx`: scb-check 0.2.0, vulture
-2.16, deptry 0.25.1, pip-audit 2.10.1. Betterleaks 1.9.0 is not on PyPI: the script downloads its
-release binary once, refuses it unless the SHA-256 matches the pinned value, and caches it in
-`~/.cache/unslop-repo/`. Set
+`scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
+scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Its code lives in `scripts/unslop/`:
+`common` (schema and helpers), `state` (issues.json and snapshots), `scope` (the files in scope),
+`leaks`, `measure`, `report`, and `tools/`, one module per tool. Each tool module starts with its `TOOL`
+(name, PyPI package, settings, severity policy), then runs the tool and turns what it finds into issues;
+`tools/base.py` defines `Tool`, which builds every issue, and the `Result` a measure step returns.
+scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
+`tools/pip_audit.py` when bumping it); deptry runs as `python -m deptry`, since its API exits the
+process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
+unless the SHA-256 matches the pinned value, and caches it in `~/.cache/unslop-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
-- `scripts/test_cleanup.py` checks the parsers and bookkeeping offline (`--offline`, a second), then
+- `scripts/test_cleanup.py` checks the bookkeeping offline (`--offline`, a second), then
   builds a throwaway repo with one known instance of each finding and checks all of them, including
   that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
-- `report` copies `cleanup.py`, `unslop/` and `leak_rules.toml` into `.cleanup/`, so another agent can
-  re-measure with `.cleanup/cleanup.py` without this skill.
+- `report` copies `cleanup.py` and `unslop/` (the leak rules are `unslop/tools/betterleaks.toml`) into
+  `.cleanup/`, so another agent can re-measure with `.cleanup/cleanup.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).
@@ -165,5 +181,5 @@ release binary once, refuses it unless the SHA-256 matches the pinned value, and
 
 ---
 
-*The thresholds in `POLICY` are defaults chosen to keep the work list short.
+*The thresholds in the tools' settings are defaults chosen to keep the work list short.
 The reference ranges come from one paper's panel of Python repos measured with its own tooling.*

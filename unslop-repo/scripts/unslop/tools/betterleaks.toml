@@ -1,0 +1,47 @@
+# Rules added to Betterleaks' built-ins for ML research repos. An id starting with "internal-" marks an
+# internal reference, and a low-confidence rule a possible credential. Keywords (lowercase) only make the
+# scan faster. Before editing, read references/leaks.md.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "netrc-password"  # `wandb login` writes these
+regex = '''(?s)\bmachine\s+\S+\s+login\s+\S+\s+password\s+(\S{8,})'''
+keywords = ["machine"]
+
+[[rules]]
+id = "sensitive-file"
+path = '''(?:^|/)(?:\.env(?:\.(?:local|dev|development|prod|production|staging|test))?|[._]netrc|kaggle\.json|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.pem|\.aws/credentials)$'''
+confidence = "low"
+
+[[rules]]
+id = "internal-mila-path"
+regex = '''/((?:network/(?:scratch|projects|datasets|weights|archive)|home/mila)/[\w./-]+)'''
+keywords = ["/network/", "/home/mila/"]
+
+[[rules]]
+id = "internal-drac-path"
+regex = '''/((?:project|projects|scratch|nearline)/(?:def|rrg|ctb)-[\w./-]+)'''
+keywords = ["def-", "rrg-", "ctb-"]
+
+[[rules]]
+id = "internal-slurm-account"
+regex = '''#SBATCH\s+(?:-A|--account)[=\s]+(\S+)'''
+keywords = ["#sbatch"]
+
+[[rules]]
+id = "internal-host-or-email"
+regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
+keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
+
+[[rules]]
+id = "internal-wandb-entity"
+regex = '''(?i)(?:wandb_entity["'\s]*[:=]\s*["']?|entity\s*=\s*["'])([\w-]{2,})'''
+keywords = ["entity"]
+
+[[rules]]
+id = "internal-home-path"
+regex = '''/((?:home|Users)/[a-z][\w.-]{1,31}/[\w./-]+)'''
+keywords = ["/home/", "/users/"]
+filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name)/`])'''

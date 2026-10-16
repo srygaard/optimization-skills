@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["scb-check==0.2.0", "vulture==2.16", "deptry==0.25.1", "pip-audit==2.10.1"]
 # ///
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 
@@ -13,16 +13,16 @@
 Everything is written to REPO/.cleanup/, which ignores itself in git. Secret values never reach
 stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_cleanup.py.
 
-Stdlib only. Analyzers run through pinned `uvx`. Betterleaks is not on PyPI, so it is downloaded once
-as a pinned release binary, checked against SHA-256 values from the release's sigstore-signed
-checksums.txt, and cached. Set BETTERLEAKS=/path/to/betterleaks to skip the download.
+The analyzers are pinned above and run in this script's environment, so `measure` needs `uv run --script`
+(the shebang does it); the other commands need only the stdlib. Betterleaks is not on PyPI, so it is
+downloaded once as a pinned release binary, checked against SHA-256 values from the release's
+sigstore-signed checksums.txt, and cached. Set BETTERLEAKS=/path/to/betterleaks to skip the download.
 """
 
 import argparse
 import sys
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .cleanup/
-from unslop.common import CleanupError
 from unslop.leaks import cmd_leaks
 from unslop.measure import cmd_measure
 from unslop.report import cmd_compare, cmd_report
@@ -47,11 +47,7 @@ def main():
     p = sub.add_parser("report", help="render .cleanup/report.md")
     p.add_argument("repo")
     a = ap.parse_args()
-    try:
-        {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)
-    except CleanupError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(2)
+    {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)
 
 
 if __name__ == "__main__":
