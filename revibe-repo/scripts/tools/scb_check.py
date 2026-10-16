@@ -10,6 +10,7 @@ from importlib.metadata import distribution
 from pathlib import Path
 
 from common import rel
+from scope import Def
 from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(
@@ -89,9 +90,10 @@ def wrapper_issues(src: Path, flags, index) -> list:
         if f.rule_id not in red_flags:
             continue
         file = rel(src, f.file)
+        d = index.at_def_line(file, f.start_line)
         out.append(TOOL.issue(
             "RF", "red-flag", red_flags[f.rule_id], "wrapper", f"{f.rule_id}: {f.message}",
-            file=file, symbol=(index.at_def_line(file, f.start_line) or (0, 0, "<module>"))[2], line=f.start_line,
+            file=file, symbol=d.qualname if d else "<module>", line=f.start_line,
             evidence={"scb_rule": f.rule_id}, effort="S",
             fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
                  "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
@@ -140,13 +142,12 @@ def complexity_issues(src: Path, flags, index) -> list:
         line = fn.start_line
         cc = fn.cyc_complexity
         sloc = fn.sloc
-        d = index.at_def_line(file, line)
-        qual, start, end = (d[2], d[0], d[1]) if d else (fn.name, line, line)
+        d = index.at_def_line(file, line) or Def(line, line, fn.name, line, "function")
         mass = cc * math.sqrt(sloc)
         out.append(TOOL.issue(
             "CX", "complexity", "cc", "complex" if mass >= TOOL.settings["medium_mass"] else "complex-small",
-            f"`{qual}` has cyclomatic complexity {cc} ({sloc} SLOC)",
-            file=file, symbol=qual, line=start, end_line=end,
+            f"`{d.qualname}` has cyclomatic complexity {cc} ({sloc} SLOC)",
+            file=file, symbol=d.qualname, line=d.start, end_line=d.end,
             evidence={"cc": cc, "sloc": sloc, "mass": round(mass, 1), "weight": round(mass, 1),
                       "cognitive": fn.cog_complexity},
             effort="L" if sloc > 150 else "M",

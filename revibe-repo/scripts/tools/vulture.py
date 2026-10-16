@@ -77,10 +77,9 @@ def runtime_lines(index, file: str, line: int) -> set:
     d = index.at_def_line(file, line)
     if not d:
         return set()
-    start, end, _, _, kind = d
-    bodies = [d] if kind == "function" else [
-        x for x in index.defs.get(file, ()) if x[4] == "function" and start <= x[0] and x[1] <= end]
-    return {n for _, e, _, def_line, _ in bodies for n in range(def_line + 1, e + 1)}
+    bodies = [d] if d.kind == "function" else [
+        x for x in index.defs.get(file, ()) if x.kind == "function" and d.start <= x.start and x.end <= d.end]
+    return {n for b in bodies for n in range(b.def_line + 1, b.end + 1)}
 
 
 def executed_lines(repo: Path) -> dict:
@@ -100,7 +99,7 @@ def dead_candidate(item, file: str, index, refs: list, coverage: dict) -> dict:
     if unreachable:
         qual = index.qualname(file, line)
     else:
-        qual = d[2] if d and d[2].endswith(item.name) else item.name
+        qual = d.qualname if d and d.qualname.endswith(item.name) else item.name
     modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
     # unreachable code can't be referenced
     hits, mentions = ([], []) if unreachable else _named_in(refs, qual.rsplit(".", 1)[-1], modules)
