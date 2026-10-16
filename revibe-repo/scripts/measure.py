@@ -73,7 +73,10 @@ def cmd_measure(a):
         snap["not_measured"]["parse"] = f"{len(scope.syntax_errors)} files don't parse: {scope.syntax_errors[:3]}"
     vulture.mark_inside_dead_code(found)
     merge(data, found, measured)
-    retired = {"ruff": "scb-check reports complexity now"}  # sources no longer run: their open issues are dismissed
+    retired = {  # sources no longer run: their open issues are dismissed
+        "ruff": "scb-check reports complexity now",
+        "git-history": "large files are checked at HEAD only now, by measure",
+    }
     for i in cleanup.open_issues():
         if i.get("source") in retired:
             i["status"] = "dismissed"

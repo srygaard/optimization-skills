@@ -1,9 +1,9 @@
-"""`cleanup.py leaks`: the mandatory leak scan, Betterleaks and large files over the full history."""
+"""`cleanup.py leaks`: the mandatory leak scan, Betterleaks over the full history."""
 
 from pathlib import Path
 
 from state import Cleanup, Severity, merge, now
-from tools import betterleaks, large_files
+from tools import betterleaks
 from utils.git import git, head
 
 
@@ -19,15 +19,15 @@ def print_leaks(repo: Path, data: dict, found: list, version: str):
 
 
 def cmd_leaks(a):
-    """`cleanup.py leaks`: Betterleaks and large files over the full history, folded into issues.json."""
+    """`cleanup.py leaks`: Betterleaks over the full history, folded into issues.json."""
     cleanup = Cleanup(a.repo)
     repo = cleanup.repo
     data = cleanup.data
     # --internal patterns are remembered, so a later scan without them doesn't mark their issues fixed
     internal = list(dict.fromkeys([*data.get("leak_scan", {}).get("internal", []), *a.internal]))
     leaks = betterleaks.scan(repo, internal)
-    found = leaks.issues + large_files.scan(repo).issues
-    merge(data, found, {betterleaks.TOOL.name, large_files.TOOL.name})
+    found = leaks.issues
+    merge(data, found, {betterleaks.TOOL.name})
     version = leaks.metrics["version"]
     data["tools"][betterleaks.TOOL.name] = version
     data["leak_scan"] = {
