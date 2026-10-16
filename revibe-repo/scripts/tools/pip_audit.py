@@ -1,5 +1,5 @@
 """pip-audit, in process: known vulnerabilities in the pinned dependencies. Its API is private (`pip_audit._*`),
-so check this file when the pin in cleanup.py changes."""
+so check this file when its version changes."""
 
 import re
 import shutil
@@ -12,6 +12,7 @@ from tools.base import Metric, Result, Tool, ToolError
 TOOL = Tool(
     name="pip-audit",
     package="pip-audit",
+    version="2.10.1",
     policy={
         "vuln-fixable": ("high", "dependency with a known vulnerability and a fixed release"),
         "vuln-unfixed": ("low", "known vulnerability without a fixed release"),

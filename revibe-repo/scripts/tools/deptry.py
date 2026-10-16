@@ -14,6 +14,7 @@ from tools.base import Metric, Result, Tool, ToolError
 TOOL = Tool(
     name="deptry",
     package="deptry",
+    version="0.25.1",
     policy={
         "deps-none": ("high", "no dependency list at all: nobody can install it"),
         "deps-undeclared": ("high", "an import that isn't a declared dependency, or only a dev one"),

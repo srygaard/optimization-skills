@@ -34,7 +34,8 @@ class Metric(NamedTuple):
 
 @dataclass(frozen=True)
 class Tool:
-    """A tool's name, where it comes from, the skill's settings for it, its severity policy and its metrics.
+    """A tool's name, where it comes from and its pinned version, the skill's settings for it, its severity policy
+    and its metrics.
 
     `policy` is the one place the tool's severities are set: every issue it reports names a row, and `report`
     prints all of them into report.md, so the docs point here instead of restating them. A row's `when`, and a
@@ -44,6 +45,7 @@ class Tool:
     name: str  # the `source` of its issues: merge() closes an open issue its source no longer finds
     policy: dict  # policy key -> (severity, when)
     package: str = ""  # its PyPI distribution, pinned in cleanup.py's script header; "" when not from PyPI
+    version: str = ""  # the pinned version its code is written against; the header pins a package at the same one
     settings: dict = field(default_factory=dict)  # thresholds and pins its code reads, by name
     metrics: tuple = ()  # the Metric of each scorecard number its measure step reports, in scorecard order
 

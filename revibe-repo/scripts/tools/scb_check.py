@@ -16,6 +16,7 @@ from tools.base import Metric, Result, Tool, ToolError
 TOOL = Tool(
     name="scb-check",
     package="scb-check",
+    version="0.2.0",
     policy={
         "complex": ("medium", "function with CC > {cc_threshold} and CC x sqrt(SLOC) >= {medium_mass} "
                               "(e.g. CC 15 over 45 lines)"),
