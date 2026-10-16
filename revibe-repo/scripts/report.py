@@ -107,8 +107,8 @@ def report_header(cleanup: Cleanup) -> list:
     data = cleanup.data
     status = data["release_status"].upper()
     reason = "" if cleanup.leak_scan_current() else " (the leak scan is not current: run `leaks` again)"
-    critical = len(cleanup.open_issues("critical"))
-    high = len(cleanup.open_issues("high"))
+    critical = len(cleanup.open_issues(Severity.critical))
+    high = len(cleanup.open_issues(Severity.high))
     blocking = (f" · {critical} critical and {high} high issues open: the High phase is what blocks the release"
                 if critical or high else "")
     return [f"# Cleanup report: {cleanup.repo.name}", "",
@@ -182,7 +182,7 @@ def severity_rules() -> list:
 
 def render_report(cleanup: Cleanup) -> str:
     """report.md: the header, the scorecard, a table per phase, the dismissed issues and the severity rules."""
-    phases = (("High", ("critical", "high")), ("Medium", ("medium",)), ("Low", ("low",)))
+    phases = (("High", (Severity.critical, Severity.high)), ("Medium", (Severity.medium,)), ("Low", (Severity.low,)))
     lines = report_header(cleanup) + scorecard_section(report_columns(cleanup))
     for phase, severities in phases:
         lines += phase_section(phase, cleanup.open_issues(*severities))
@@ -205,6 +205,6 @@ def cmd_report(a):
         for package in ("tools", "utils"):
             shutil.rmtree(d / package, ignore_errors=True)  # a module renamed since the last copy must not linger
             shutil.copytree(scripts / package, d / package, ignore=shutil.ignore_patterns("__pycache__"))
-    counts = " · ".join(f"{len(cleanup.open_issues(s.name))} {s.name}" for s in Severity)
+    counts = " · ".join(f"{len(cleanup.open_issues(s))} {s.name}" for s in Severity)
     print(f"release: {cleanup.data['release_status'].upper()}  ·  open {counts}")
     print(f"-> {d / 'report.md'}")
