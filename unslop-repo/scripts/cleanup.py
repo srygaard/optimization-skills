@@ -60,6 +60,7 @@ MIN_CLONE_LINES = 10  # smaller duplicate blocks still count in Clone Ratio but 
 MIN_DEAD_LINES = 5  # smaller unused symbols still count in dead-code LOC but get no issue
 DEAD_HIGH_LINES = 20  # unused symbols at least this long are high: remove them before release
 LARGE_FILE_MB = 5
+LONG_FILE_LINES, WARN_FILE_LINES = 1000, 500  # source files longer than this should be split / are counted
 DEFAULT_EXCLUDES = (
     "tests/**", "test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**", ".cleanup/**",
 )
@@ -89,6 +90,7 @@ POLICY = {
                           "(e.g. CC 15 over 45 lines)"),
     "repetition": ("medium", f"duplicate group with lines x (copies - 1) >= {MEDIUM_DUP_LINES}"),
     "wrapper": ("medium", "trivial wrapper or shallow function"),
+    "long-file": ("medium", f"source file over {LONG_FILE_LINES} lines: split it into modules"),
     "internal-history": ("low", "internal reference only in history: a fresh squashed history drops it"),
     "dead-small": ("low", f"unused function or class of {MIN_DEAD_LINES}-{DEAD_HIGH_LINES - 1} lines"),
     "complex-small": ("low", f"function with CC > {CC_THRESHOLD} and a smaller mass"),
@@ -103,7 +105,7 @@ POLICY = {
 }
 STATUSES = ("open", "fixed", "dismissed")
 CATEGORIES = ("leak", "internal-ref", "large-file", "license", "vulnerable-dependency", "readiness", "dead-code",
-              "complexity", "red-flag", "bug")
+              "complexity", "red-flag", "file-length", "bug")
 ISSUE_DEFAULTS = {"source": "agent", "rule": "", "file": "", "line": None, "end_line": None, "symbol": "",
                   "evidence": {}, "fix": "", "done_when": "", "effort": "S", "status": "open", "note": ""}
 AGENT_FIELDS = ("status", "severity", "fix", "done_when", "note", "effort")
@@ -604,12 +606,13 @@ def shipped_files(repo: Path, excludes: list) -> list:
 
 
 class CodeIndex:
-    """Functions and classes per file (qualname, span) and the lines that hold code."""
+    """Functions and classes per file (qualname, span), the lines that hold code, and each file's length."""
 
     def __init__(self, repo: Path, files: list):
-        self.defs, self.code, self.syntax_errors = {}, {}, []
+        self.defs, self.code, self.lines, self.syntax_errors = {}, {}, {}, []
         for rel in files:
             text = (repo / rel).read_text(errors="replace")
+            self.lines[rel] = len(text.splitlines())
             self.code[rel] = {n for n, s in enumerate(text.splitlines(), 1)
                               if s.strip() and not s.strip().startswith("#")}
             try:
@@ -1130,10 +1133,27 @@ def count_suppressions(repo: Path, files: list) -> int:
     return sum(len(pattern.findall((repo / f).read_text(errors="replace"))) for f in files)
 
 
+def file_lengths(repo, files, index) -> Result:
+    """Average length of the source files, how many pass 500 and 1000 lines, and an issue for the latter."""
+    lines = index.lines
+    out = [issue(
+        "SIZE", "file-length", "file-length", "long-file", "long-file", f"`{f}` has {n:,} lines",
+        file=f, evidence={"lines": n, "weight": n}, effort="M",
+        fix=("Split it into modules of a few hundred lines, each owning one concept (what it hides, not when it "
+             "runs). Move the code unchanged in its own commit, then refactor; if other code imports from this "
+             "module, keep that import path working."),
+        done_when=f"It is under {LONG_FILE_LINES} lines, and the import test and safety net pass.")
+        for f, n in sorted(lines.items()) if n > LONG_FILE_LINES]
+    return Result(out, {"avg_file_lines": round(sum(lines.values()) / len(lines)) if lines else 0,
+                        "files_over_500": sum(n > WARN_FILE_LINES for n in lines.values()),
+                        "files_over_1000": len(out)})
+
+
 # --- measure ---------------------------------------------------------------------------------------
 
 STEPS = (("scb-check", scb_check), ("vulture", vulture_dead),
-         ("deptry", deptry_deps), ("pip-audit", pip_audit_vulns), ("license", license_readme))
+         ("deptry", deptry_deps), ("pip-audit", pip_audit_vulns), ("license", license_readme),
+         ("file-length", file_lengths))
 
 
 def run_steps(repo, files, index, steps=None) -> tuple:
@@ -1211,6 +1231,8 @@ ROWS = (  # key, label, format
     ("dead_code_loc", "Dead code LOC", "{:,}"), ("red_flags_open", "Red flags open", "{:,}"),
     ("leaks_open", "Leaks open", "{:,}"), ("vulnerable_deps", "Vulnerable deps", "{:,}"),
     ("deps_missing", "Dependency problems", "{:,}"), ("suppressions", "Suppressions", "{:,}"),
+    ("avg_file_lines", "Avg file length", "{:,}"), ("files_over_500", f"Files > {WARN_FILE_LINES} lines", "{:,}"),
+    ("files_over_1000", f"Files > {LONG_FILE_LINES} lines", "{:,}"),
 )
 
 
@@ -1310,7 +1332,8 @@ def comparison_warnings(base: dict, after: dict) -> list:
     """Regressions in absolute terms. Ratios are not used: deleting clean code raises them on its own."""
     out = []
     for key, label in (("verbosity_flagged_loc", "verbosity-flagged LOC"),
-                       ("high_cc_mass", "mass in functions with CC > 10"), ("suppressions", "suppressions")):
+                       ("high_cc_mass", "mass in functions with CC > 10"), ("suppressions", "suppressions"),
+                       ("files_over_1000", f"files over {LONG_FILE_LINES} lines")):
         b, n = base["metrics"].get(key), after["metrics"].get(key)
         if b is not None and n is not None and n > b:
             out.append(f"{label} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings")
