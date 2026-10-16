@@ -28,20 +28,26 @@ class ScbCheck(Step):
         "complex-small": "function with CC > 10 and a smaller mass",
         "repetition-small": "smaller duplicate group of {min_clone_lines}+ lines",
     }
-    # the averages quoted are SlopCodeBench's (arXiv 2603.24755), for maintained human Python repos and agent-written
-    # code; only Verbosity and Erosion compare, since scb-check 0.2.0 measures the other ratios differently
+    # The averages quoted are SlopCodeBench's, for maintained human Python repos and agent-written code, from the
+    # latest version that reports each: Verbosity and Erosion from arXiv 2603.24755v2 (Table 2), Violation % and
+    # Clone Ratio from v1 (Table 2; v2 dropped them). scb-check 0.2.0 measures those two with its own rules.
     metrics = (
         Metric("loc", "LOC", description="lines of code in scope"),
         Metric("verbosity", "Verbosity", "{:.3f}",
                description="share of lines that are duplicated or flagged by slop rules (maintained human code "
-                           "averages 0.15, agent code 0.33)"),
+                           "averages 0.19, agent code 0.44)"),
         Metric("erosion", "Erosion", "{:.3f}",
                description="share of complexity mass (CC × √SLOC) in functions with CC > 10 (human code averages "
-                           "0.31, agent code 0.68)"),
+                           "0.34, agent code 0.68)"),
         Metric("cog_erosion", "Cognitive erosion", "{:.3f}",
-               description="the same share, by cognitive complexity: nesting costs more"),
-        Metric("violation_pct", "Violation %", "{:.3f}", description="share of lines flagged by slop rules"),
-        Metric("clone_ratio", "Clone Ratio", "{:.3f}", description="share of lines in duplicated blocks"),
+               description="the same share, by cognitive complexity: nesting costs more (the paper has no "
+                           "reference for it)"),
+        Metric("violation_pct", "Violation %", "{:.3f}",
+               description="share of lines flagged by slop rules (human code averages 0.11, agent code 0.32, by "
+                           "the paper's own rules: compare changes, not levels)"),
+        Metric("clone_ratio", "Clone Ratio", "{:.3f}",
+               description="share of lines in duplicated blocks (human code averages 0.06, agent code 0.08, by the "
+                           "paper's own clone detection: compare changes, not levels)"),
         Metric("cc_over_10", "Functions CC > 10",
                description="functions with cyclomatic complexity over 10 (`and`/`or` count): the work list "
                            "behind Erosion"),
