@@ -1,5 +1,5 @@
 """REPO/.revibe/: issues.json, the single source of truth for the issues and the leak scan, and one folder per
-measured commit, whose metrics.json tracks the scorecard across the work. Every command opens it as a `Cleanup`;
+measured commit (`<commit time>-<commit>`), whose metrics.json tracks the scorecard across the work. Every command opens it as a `Cleanup`;
 report.md is generated from both."""
 
 import datetime as dt
@@ -9,7 +9,7 @@ from enum import IntEnum
 from pathlib import Path
 
 from tools.base import Metric
-from utils.git import head, repo_root
+from utils.git import git, head, repo_root
 from utils.process import run
 
 
@@ -69,8 +69,10 @@ class Cleanup:
         return "blocked" if blocked else "clear"
 
     def snapshot_path(self, commit: str) -> Path:
-        """Where the metrics of `commit` are kept: a folder per measured commit."""
-        return self.dir / commit[:12] / "metrics.json"
+        """Where the metrics of `commit` are kept: a folder per measured commit, named by its commit time (Unix
+        epoch) and hash, so the folders list in the order the commits were made."""
+        epoch = git(self.repo, "show", "-s", "--format=%ct", commit).strip()
+        return self.dir / f"{epoch}-{commit[:12]}" / "metrics.json"
 
     def snapshots(self) -> list:
         """The metrics of every measured commit, oldest first."""
@@ -109,6 +111,10 @@ class Cleanup:
         path = self.snapshot_path(snap["commit"])
         path.parent.mkdir(exist_ok=True)
         path.write_text(json.dumps(snap, indent=2) + "\n")
+        legacy = self.dir / snap["commit"][:12]  # older versions named the folder by the commit alone
+        if (legacy / "metrics.json").exists():
+            (legacy / "metrics.json").unlink()
+            legacy.rmdir()
         return path
 
     def save(self):

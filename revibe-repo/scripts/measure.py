@@ -56,7 +56,7 @@ def run_steps(scope, steps=MEASURE) -> tuple:
 
 def cmd_measure(a):
     """`cleanup.py measure`: run every measure step, fold their issues into issues.json, and write this commit's
-    metrics to .revibe/<commit>/metrics.json."""
+    metrics to .revibe/<commit time>-<commit>/metrics.json."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
     repo = cleanup.repo
