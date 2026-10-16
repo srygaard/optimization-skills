@@ -134,9 +134,9 @@ def offline():
         inline = created["deptry"].measure(scope.Scope(Path(tmp), ["tool.py"]))
         Path(tmp, "setup.py").write_text("from setuptools import setup\n")
         unreadable = created["deptry"].measure(scope.Scope(Path(tmp), ["tool.py"]))
-        check(none.skipped and none.issues[0]["severity"] == inline.issues[0]["severity"] == "high"
-              and unreadable.issues[0]["severity"] == "low",
-              "no list where pip or uv look is high, even with PEP 723 blocks; only a setup.py deptry can't read is low")
+        check(none.skipped and {i.issues[0]["severity"] for i in (none, inline, unreadable)} == {"high"}
+              and "setup.py" in unreadable.issues[0]["summary"],
+              "no pyproject.toml dependencies or requirements.txt at the root is high, with PEP 723 blocks or a setup.py")
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "mod.py").write_text("import x\n\n\ndef f(a):\n    return a\n\n\nclass C:\n    X = 1\n\n"
@@ -164,14 +164,6 @@ def offline():
               "[y for y in range(2)]\ndef f():\n    global G\n    G = 1\n    local = 2\nclass C:\n    attr = 1\n")
     check(scope.module_globals(ast.parse(module)) == ["A", "B", "G", "i", "x"],
           "globals are the names bound at module level or declared `global`, not locals, class attributes or dunders")
-    code = ("SHAPE = (3, 224)\n"
-            "def f(x, eps=1e-6):\n"
-            "    y = x[:, 3] * 0.1\n"
-            "    z = g(x, 7, scale=4, opts={'k': 9})\n"
-            "    return y - 1 + 2 + -1\n")
-    magic = created["magic-numbers"].magic_numbers(ast.parse(code))
-    check(sorted(v for _, v in magic) == [0.1, 3, 7],
-          "magic numbers are unnamed literals: not assigned, defaults, keyword arguments, dict values or -1/0/1/2")
 
     with tempfile.TemporaryDirectory() as tmp:
         def load(text):
@@ -287,12 +279,13 @@ def normalize_b(rows):
         out.append(row)
     return out
 """)
-    write("pkg/vendored.py", 'def borrowed(x):\n    return x\n\n\nPATTERN = "a\\.b"\n')  # an invalid escape
+    write("pkg/vendored.py", 'def borrowed(x):\n    return x\n\n\nPATTERN = "a\\.b"  # noqa: W605\n'  # an invalid escape
+          'HINT = "add # noqa to hide it"\n')
     write("pkg/main.py", "import pkg.constants\nimport pkg.trainer\n"
           "from pkg.model import route, normalize_a, normalize_b\nfrom pkg.shared import dispatch\n"
           "from pkg.vendored import borrowed\n\n\n"
           "def main():\n    if True:\n" + "        print(route('k1', 1))\n" * 6 +
-          "    print(normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2))\n\n\n"
+          "    print(normalize_a([1]), normalize_b([2]), borrowed(3), dispatch('k2', 2), pkg.trainer.bucket(40))\n\n\n"
           "if __name__ == '__main__':\n    main()\n")
     write("pkg/legacy.py", "def old_route(x):\n" + "    x += 1\n" * 25 + "    return x\n")
     write("pkg/tests/helpers.py", "def fixture_rows():\n" + "    rows = []\n" * 6 + "    return rows\n")
@@ -307,8 +300,10 @@ def normalize_b(rows):
     (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
     write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
     write("pkg/constants.py", "".join(f"C{n} = {n}\n" for n in range(1001)))
-    write("pkg/trainer.py", "def train(model, steps):\n    for _ in range(steps):\n        model.step()\n"
-          "    model.save()\n    return model\n")
+    write("pkg/trainer.py", "import os\n\n\ndef train(model, steps):\n    for _ in range(steps):\n        model.step()\n"
+          "    model.save(os.path.join('runs', 'last.pt'))\n    return model\n\n\n"
+          "def bucket(n_atoms):\n    if n_atoms > 38:\n        return 'large'\n    if n_atoms > 12:\n"
+          "        return 'medium'\n    return 'small' if n_atoms > 5 else 'tiny'\n")
     write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
@@ -409,8 +404,12 @@ def end_to_end():
               and metrics["files_over_1000_code_lines"] == 1 and metrics["files_over_500_code_lines"] == 1
               and metrics["avg_code_lines"] > 0,
               "a module of 1001 code lines -> medium 'split it' issue, counted with the average file length")
-        check(one("red-flag", "magic-numbers", symbol="route", severity="medium") and metrics["magic_numbers"] > 0,
-              "a function with many unnamed numbers -> medium magic-numbers issue, and a scorecard count")
+        check(one("red-flag", "magic-numbers", symbol="bucket", severity="medium") and metrics["magic_comparisons"] > 0
+              and not one("red-flag", "magic-numbers", symbol="route"),
+              "comparisons against unnamed numbers -> medium magic-numbers issue; arguments and indices don't count")
+        check(one("pathlib", "string-paths", severity="low") and metrics["string_paths"] > 0,
+              "os.path calls -> one low string-paths issue, and a scorecard count")
+        check(metrics["suppressions"] == 1, "a `# noqa` comment is a suppression; the same text in a string is not")
         check(one("globals", "module-globals", severity="low") and metrics["globals"] >= 1001,
               "module-level globals -> one low issue, and a scorecard count")
         if "pip-audit" in at_head()["not_measured"]:

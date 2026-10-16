@@ -5,7 +5,7 @@ easier to understand, use or change. A flag on code that is about to be deleted 
 
 **Found automatically** by `measure` (via scb-check): **Repetition** (duplicated blocks of 10+ lines),
 **Pass-Through Method** (`trivial-wrapper`), **Shallow Module** (`low-use-short-function`), and
-**Nonobvious Code** as magic numbers (by `ast`).
+**Nonobvious Code** as comparisons against unnamed numbers (ruff PLR2004).
 **The rest come from your review** of the exposed code and the files holding medium issues.
 
 | flag | how it shows up in ML research code | typical fix | severity |
@@ -16,7 +16,7 @@ easier to understand, use or change. A flag on code that is about to be deleted 
 | Information Leakage | the same batch-dict keys, file layout or tensor-shape convention hardcoded in several modules | one module owns the format; the others call it | medium |
 | Overexposure | `train(...)` with 40 keyword arguments, most never changed; config objects every caller must fill in | sensible defaults; group rarely used options | medium |
 | Special-General Mixture | `if dataset == "imagenet":` or `if args.exp == "v3":` inside a generic layer or loop | move the special case to the caller, a config or a subclass | medium |
-| Nonobvious Code | magic indices into tensors, monkeypatching (`model.train = disabled_train`), `getattr` with built strings, side effects on import | name it, explain the why in one comment, or simplify | medium |
+| Nonobvious Code | unnamed thresholds (`if n_atoms > 38:`), monkeypatching (`model.train = disabled_train`), `getattr` with built strings, side effects on import | name it, explain the why in one comment, or simplify | medium |
 | Temporal Decomposition | `preprocess.py` → `stage2.py` → `postprocess.py` split by execution order, each knowing the same file format | group by what each piece hides, not by when it runs | low |
 | Conjoined Methods | `forward` and `_forward_impl` (or train/eval twins) that can't be read apart | merge, or split along a real boundary | low |
 | Hard to Describe | a docstring can't say what the function does in one sentence without "and/also/unless" | split along the "and", or narrow what it does | low |

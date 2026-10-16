@@ -12,10 +12,13 @@ class FileLength(Step):
                      "split it into modules",
     }
     metrics = (
-        Metric("avg_code_lines", "Avg code lines per file"),
-        Metric("files_over_500_code_lines", "Files > {warn_file_lines} code lines"),
+        Metric("avg_code_lines", "Avg code lines per file",
+               description="code lines per source file: blanks, comments, docstrings and imports aside"),
+        Metric("files_over_500_code_lines", "Files > {warn_file_lines} code lines",
+               description="source files getting long"),
         Metric("files_over_1000_code_lines", "Files > {long_file_lines} code lines",
-               warn="files over {long_file_lines} code lines"),
+               warn="files over {long_file_lines} code lines",
+               description="source files to split into modules that each own one concept"),
     )
 
     def measure(self, scope) -> Result:

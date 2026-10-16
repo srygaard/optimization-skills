@@ -35,7 +35,10 @@ class Cleanup:
     """A repo's .revibe/ folder: its issues.json, loaded and checked, and the metrics of each measured commit."""
 
     # the scorecard rows count_issues sets, after the measure steps' own
-    metrics = (Metric("red_flags_open", "Red flags open"), Metric("leaks_open", "Leaks open"))
+    metrics = (
+        Metric("red_flags_open", "Red flags open", description="open red-flag issues, found by tools or in review"),
+        Metric("leaks_open", "Leaks open", description="open leaked credentials"),
+    )
 
     def __init__(self, path: str):
         self.repo = repo_root(path)
@@ -161,7 +164,7 @@ def check_issues(issues: list, path: Path):
                 "evidence": {}, "fix": "", "done_when": "", "effort": "S", "status": "open", "note": ""}
     statuses = ("open", "fixed", "dismissed")
     categories = ("leak", "internal-ref", "large-file", "license", "vulnerable-dependency", "readiness",
-                  "dead-code", "complexity", "red-flag", "file-length", "globals", "bug")
+                  "dead-code", "complexity", "red-flag", "file-length", "globals", "pathlib", "bug")
     problems = []
     seen = set()
     for n, i in enumerate(issues, 1):

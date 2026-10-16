@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["scb-check==0.2.0", "vulture==2.16", "deptry==0.25.1", "pip-audit==2.10.1"]
+# dependencies = ["scb-check==0.2.0", "vulture==2.16", "deptry==0.25.1", "pip-audit==2.10.1", "ruff==0.15.7"]
 # ///
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 

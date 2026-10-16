@@ -90,9 +90,9 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
 | severity | meaning | for example | phase |
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
-| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, functions with many magic numbers, working notes at the root, red flags you add | Medium |
-| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other magic numbers, other history-only findings, unused deps, no lockfile | Low |
+| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; fixable vulnerabilities; no pyproject.toml dependencies or requirements.txt at the root; no README | High |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, functions comparing against many unnamed numbers, working notes at the root, red flags you add | Medium |
+| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, other magic comparisons, string paths, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
 severity of every kind of finding it reports and the thresholds they use; the tool's class says what each
@@ -150,12 +150,13 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
 | Avg code lines per file, Files > 500 / > 1000 code lines | `tokenize`, `ast` | code lines per source file: comments, docstrings, imports and blank lines don't count, so documenting code never makes a file "too long". A file over 1000 gets a medium issue: split it into modules that each own one concept. A file that doesn't parse has no count (it is listed under not measured) |
 | Globals | `ast` | names a module binds outside its functions and classes, constants included, plus names declared `global`. One low issue holds the count and the files with the most |
-| Magic numbers | `ast` | numeric literals no name explains: not an assignment's value, a default, a keyword argument or a dict value, and not -1, 0, 1 or 2. A function with 5+ distinct ones gets a medium issue; one low issue counts the rest |
+| Magic comparisons | ruff PLR2004 | comparisons against unnamed numbers (`if n_atoms > 38:`). Positional arguments and indices don't count: they are normal in scientific code. A function comparing against 3+ distinct ones gets a medium issue; one low issue counts the rest |
+| String paths | ruff PTH | `os.path`, `open()` and `glob` calls on string paths, where pathlib reads better. One low issue counts them: convert the code you touch anyway |
 
-- **Reference ranges** from SlopCodeBench (arXiv 2603.24755): maintained human Python repos average
-  Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68. They are for orientation, not targets.
-  scb-check 0.2.0 measures Violation % and Clone Ratio differently from the paper, so those two have no
-  reference.
+- **Reference averages** from SlopCodeBench (arXiv 2603.24755), quoted in the report's metric descriptions:
+  maintained human Python repos average Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68.
+  They are for orientation, not targets. scb-check 0.2.0 measures Violation % and Clone Ratio differently
+  from the paper, so those two have none.
 - **Ratios can rise when you delete clean code.** `compare` warns on absolute amounts instead: verbosity-
   flagged LOC, mass in high-CC functions, suppressions, files over 1000 code lines, module-level globals.
   A warning after a refactor means it added slop.
@@ -169,7 +170,7 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
 ## 5. The script
 
 `scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
-scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. Each tool's class names the same
+scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1, ruff 0.15.7. Each tool's class names the same
 version (a test keeps them equal), and `measure` stops if another one is installed. The modules it
 imports sit next to it: `state` (issues.json, its severity scale and the snapshots), `scope` (the files
 in scope), `leaks`, `measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module
@@ -184,8 +185,8 @@ severities that don't match its policy. `tools/base.py` defines `Tool`, which bu
 scan, has `scan` instead.
 
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
-`tools/pip_audit.py` when bumping it); deptry runs as `python -m deptry`, since its API exits the
-process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
+`tools/pip_audit.py` when bumping it); ruff runs as `python -m ruff`, and deptry as `python -m deptry`, since
+deptry's API exits the process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
 unless the SHA-256 matches the pinned value, and caches it in `~/.cache/revibe-repo/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 

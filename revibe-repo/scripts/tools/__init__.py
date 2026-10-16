@@ -12,9 +12,9 @@ from tools.deptry import Deptry
 from tools.file_length import FileLength
 from tools.large_files import LargeFiles
 from tools.license import License
-from tools.magic_numbers import MagicNumbers
 from tools.module_globals import ModuleGlobals
 from tools.pip_audit import PipAudit
+from tools.ruff import Ruff
 from tools.scb_check import ScbCheck
 from tools.suppressions import Suppressions
 from tools.vulture import Vulture
@@ -37,7 +37,7 @@ MEASURE: tuple[Step, ...] = (
             "dead_high_lines": 20,  # unused symbols at least this long are high: remove them before release
         },
     ),
-    Deptry(severity={"deps-none": "high", "deps-undeclared": "high", "deps-unused": "low", "deps-unreadable": "low"}),
+    Deptry(severity={"deps-none": "high", "deps-undeclared": "high", "deps-unused": "low"}),
     PipAudit(severity={"vuln-fixable": "high", "vuln-unfixed": "low", "pins-none": "low"}),
     License(severity={"license-missing": "high", "readme-missing": "high"}),
     LargeFiles(severity={"large-file": "high"}, settings={"large_file_mb": 5}),
@@ -50,9 +50,9 @@ MEASURE: tuple[Step, ...] = (
         },
     ),
     ModuleGlobals(severity={"globals": "low"}),
-    MagicNumbers(
-        severity={"magic-function": "medium", "magic-numbers": "low"},
-        settings={"medium_magic": 5},  # distinct unnamed numbers from which a function is medium
+    Ruff(
+        severity={"magic-function": "medium", "magic-numbers": "low", "string-paths": "low"},
+        settings={"medium_magic": 3},  # distinct unnamed numbers a function compares against from which it is medium
     ),
     Suppressions(),
 )

@@ -10,7 +10,8 @@ class ModuleGlobals(Step):
     policy = {
         "globals": "module-level globals, constants included: each could live next to its only user",
     }
-    metrics = (Metric("globals", "Globals", warn="module-level globals"),)
+    metrics = (Metric("globals", "Globals", warn="module-level globals",
+                      description="names bound at module level, constants included"),)
 
     def measure(self, scope) -> Result:
         """How many module-level globals the code has, as a metric and as one issue naming the files with most."""
