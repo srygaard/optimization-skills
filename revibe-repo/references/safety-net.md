@@ -28,9 +28,11 @@ def test_imports(name):
 
 **Every entry point starts.** Run each script's `--help` in a subprocess and assert exit code 0.
 
-**A characterization test for each function you change.** Call it with small synthetic inputs, such as
-tiny tensors or a toy config, and pin today's output, bugs included. Write it before the change, and
-make sure it passes before and after.
+**A characterization test for each risky function you change:** one that is somewhat complex (several
+branches or loops, roughly CC above 5) or has side effects (files, global state, randomness, devices).
+Call it with small synthetic inputs, such as tiny tensors or a toy config, and pin today's output, bugs
+included. Write it before the change, and make sure it passes before and after. A short or simple pure
+function needs no test of its own: read the change, and rely on the import test and its callers' tests.
 
 ```python
 def test_attention_block_unchanged():

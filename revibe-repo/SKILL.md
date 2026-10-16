@@ -29,8 +29,10 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 1. **Run the leak scan first; it is mandatory.** `measure` and `report` refuse to run until `leaks` has
    scanned the current commit. Never print, echo or `cat` a secret. Rotating keys is the user's job.
 2. **Measure before changing anything,** and re-measure with the same scope and tool versions.
-3. **Build the safety net before refactoring:** every function you change needs a test that calls it.
-   See [safety-net.md](references/safety-net.md).
+3. **Build the safety net before refactoring,** in proportion to the risk: a characterization test for
+   each function you change that is somewhat complex (roughly CC above 5) or has side effects (files,
+   global state, randomness, devices). A short or simple pure function needs none: the import test and
+   its callers' tests cover it. See [safety-net.md](references/safety-net.md).
 4. **The user approves each phase** before work on it starts.
 5. **No nitpicks.** Only record or change something that makes the code meaningfully easier to
    understand, use or change. A refactor that adds lines needs a reason. Never pack code to save lines
@@ -66,9 +68,10 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
   baseline and the last six commits measured after it.
 
 **While refactoring** (report.md repeats these):
-- If a file holds many pure functions, consider organizing them into classes.
+- If a file holds many related pure functions, consider organizing them into a class.
 - If a function returns a tuple, consider making it a named tuple, so callers read fields by name.
-- If a function or method you touch has no docstring, add one sentence explaining its purpose.
+- If a function or method you touch is somewhat complex (several branches or loops, roughly CC above 5)
+  and has no docstring, add one sentence explaining its purpose. Simple ones need none.
 - Avoid introducing new globals: keep a constant next to its only user, and pass state as arguments.
   The scorecard counts module-level globals, and `compare` warns when the count goes up.
 - Avoid catch-all modules such as `common.py` or `utils.py`. Put helpers in a `utils/` package with
