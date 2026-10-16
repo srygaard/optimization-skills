@@ -2,10 +2,12 @@
 exits the process, so it runs as `python -m deptry` from this script's environment and reports in JSON."""
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
 
+from utils.git import git
 from utils.paths import rel
 from utils.process import run
 from utils.pyproject import read_pyproject
@@ -24,7 +26,8 @@ class Deptry(Step):
         "deps-unused": "declared dependency that is never imported",
     }
     metrics = (Metric("deps_missing", "Dependency problems",
-                      description="imports not declared as dependencies, and declared ones never imported"),)
+                      description="imports in the code in scope (tests aside) not declared as dependencies, and "
+                                  "declared ones it never imports"),)
 
     def no_dependency_list(self, repo: Path) -> dict:
         """No pyproject.toml dependencies or requirements.txt at the repo root. A list anywhere else (setup.py,
@@ -42,7 +45,8 @@ class Deptry(Step):
             done_when="`cleanup.py measure` runs deptry without 'not measured'.")
 
     def measure(self, scope) -> Result:
-        """Undeclared, unused and dev-only dependencies, or one issue saying there is no list deptry can read."""
+        """Undeclared, unused and dev-only dependencies of the code in scope, or one issue saying there is no list
+        deptry can read. Tests are out of scope, so a test importing a dev dependency such as pytest is fine."""
         repo = scope.repo
         source = deptry_source(repo)
         if source is None:
@@ -55,9 +59,10 @@ class Deptry(Step):
                     "python-dateutil=dateutil,attrs=attr,tensorboardx=tensorboardX,ftfy=ftfy")
         with tempfile.TemporaryDirectory(prefix="cleanup-deptry-") as tmp:
             report = Path(tmp) / "deptry.json"
-            # -I: a deptry.py in the working directory (this module's, or the repo's) must not shadow deptry
-            p = run([sys.executable, "-I", "-m", "deptry", repo, *source, "--package-module-name-map", name_map,
-                     "--json-output", report])
+            # In the repo, on ".": deptry matches its excludes against the paths it walks, so they only work when
+            # those are relative. -I: a deptry.py in the repo must not shadow deptry.
+            p = run([sys.executable, "-I", "-m", "deptry", ".", *source, *deptry_excludes(scope),
+                     "--package-module-name-map", name_map, "--json-output", report], cwd=repo)
             if not report.exists():
                 raise ToolError((p.stderr or p.stdout).strip()[-300:])
             violations = json.loads(report.read_text())
@@ -82,6 +87,16 @@ class Deptry(Step):
                 fix=fixes[code].format(module) if code in fixes else message, effort="S",
                 done_when="deptry no longer reports it."))
         return Result(out, {"deps_missing": sum(v["error"]["code"] != "DEP002" for v in violations)})
+
+
+def deptry_excludes(scope) -> list:
+    """deptry's --extend-exclude arguments: the repo's own, which the command line would otherwise replace, and the
+    tracked Python files outside the scope (tests, and whatever else measure leaves out), each matched exactly."""
+    own = read_pyproject(scope.repo).get("tool", {}).get("deptry", {}).get("extend_exclude", [])
+    tracked = {f for f in git(scope.repo, "ls-files", "-z", "--", "*.py").split("\0") if f}
+    outside = sorted(tracked - set(scope.files))
+    patterns = [*own, "(?:" + "|".join(map(re.escape, outside)) + ")$"] if outside else own
+    return [arg for pattern in patterns for arg in ("--extend-exclude", pattern)]
 
 
 def deptry_source(repo: Path) -> list | None:

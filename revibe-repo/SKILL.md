@@ -64,8 +64,9 @@ $S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline a
   rewritten history is read again in full.
 - `--internal REGEX` adds a repo-specific internal pattern (a lab hostname, `/checkpoint/`). Patterns
   are remembered for later scans.
-- `--exclude GLOB` on `measure` leaves paths out of the metrics. Tests and docs are excluded by default,
-  so adding a safety net doesn't move the numbers. Keep the same excludes for every commit.
+- `--exclude GLOB` on `measure` leaves paths out of the metrics and the dependency check. Tests and docs
+  are excluded by default, so adding a safety net (and its `import pytest`) doesn't move the numbers.
+  Keep the same excludes for every commit.
 - `--label NAME` names a commit's metrics (`baseline` is the one `compare` and the report start from;
   without it, the first measured commit). `compare` takes a label, a commit or any git ref, and by
   default compares the baseline with the latest measured commit. The report's scorecard shows the
