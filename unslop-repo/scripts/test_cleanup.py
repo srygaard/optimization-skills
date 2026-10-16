@@ -286,6 +286,7 @@ def normalize_b(rows):
     (root / "shared/dispatch.py").write_text(f"def dispatch(kind, x):\n{branches}\n    return x\n")
     (repo / "pkg/shared.py").symlink_to("../../shared/dispatch.py")
     write("configs/model.yaml", "model:\n  target: pkg.model.ConfigOnlyModel\n  params:\n    width: 4\n")
+    write("pkg/constants.py", "".join(f"C{n} = {n}\n" for n in range(1001)))
     write("pkg/trainer.py", "def train(model, steps):\n    for _ in range(steps):\n        model.step()\n"
           "    model.save()\n    return model\n")
     write("tests/test_model.py", "def test_mode(model):\n    model.train()\n")
@@ -359,6 +360,10 @@ def end_to_end():
               "complex dead function -> delete it (high), don't refactor it (low)")
         check(one("red-flag", "repetition"), "duplicated block -> repetition issue")
         check(one("readiness", "DEP001", symbol="numpy", severity="high"), "undeclared numpy -> high")
+        metrics = json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["metrics"]
+        check(one("file-length", "long-file", file="pkg/constants.py", severity="medium")
+              and metrics["files_over_1000"] == 1 and metrics["files_over_500"] == 1 and metrics["avg_file_lines"] > 0,
+              "a 1001-line module -> medium 'split it' issue, counted with the average file length")
         if "pip-audit" in json.loads((repo / ".cleanup/snapshots/baseline.json").read_text())["not_measured"]:
             print("  skip pip-audit check (offline?)")
         else:

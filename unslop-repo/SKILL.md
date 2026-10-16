@@ -63,7 +63,7 @@ $S/cleanup.py compare <repo> baseline && $S/cleanup.py report <repo>
 |---|---|---|---|
 | **critical** | can't be undone once published | credentials anywhere in history | High, first |
 | **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code; license problems; fixable vulnerabilities; missing dependencies or README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, big files in history, red flags you add | Medium |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 lines, big files in history, red flags you add | Medium |
 | **low** | optional | smaller complexity and duplication, small dead code, other history-only findings, unused deps, no lockfile | Low |
 
 The exact rules and thresholds are `POLICY` in `scripts/cleanup.py`, the one place severities are set.
@@ -118,6 +118,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 | Dead code LOC | vulture | unused functions and classes not named anywhere else |
 | Red flags open, Leaks open | issues.json | counts of open issues |
 | Suppressions | grep | `# noqa` and `# scbc ignore`: hiding findings is not fixing them |
+| Avg file length, Files > 500 / > 1000 lines | line count | lines per source file. A file over 1000 lines gets a medium issue: split it into modules that each own one concept |
 
 - **Reference ranges** from SlopCodeBench (arXiv 2603.24755): maintained human Python repos average
   Verbosity 0.15 and Erosion 0.31, agent-written code 0.33 and 0.68. They are for orientation, not targets.
