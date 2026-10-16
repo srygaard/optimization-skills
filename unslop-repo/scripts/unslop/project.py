@@ -28,27 +28,46 @@ def _pyproject(repo: Path) -> dict:
         return {}
 
 
-def deptry_deps(repo, files, index) -> Result:
+DEPTRY_FIXES = {
+    "DEP001": "Declare the package that provides `{}` as a dependency.",
+    "DEP002": "Remove `{}` from the dependencies if it is really unused.",
+    "DEP003": "`{}` is only installed transitively: declare it directly.",
+    "DEP004": "`{}` is a dev dependency but the code imports it: move it to the main dependencies.",
+}
+
+
+def deptry_source(repo: Path) -> list | None:
+    """deptry's arguments for the dependency list it can read: pyproject.toml, then requirements.txt."""
     pyproject = _pyproject(repo)
     if pyproject.get("project", {}).get("dependencies") is not None or \
             pyproject.get("tool", {}).get("poetry", {}).get("dependencies"):
-        source = ["--config", repo / "pyproject.toml"]
-    elif (repo / "requirements.txt").exists():
-        source = ["--requirements-files", repo / "requirements.txt"]
-    else:
-        elsewhere = [n for n in ("environment.yml", "environment.yaml", "setup.py", "setup.cfg", "Pipfile")
-                     if (repo / n).exists()] + sorted(p.name for p in repo.glob("requirements?*.txt"))
-        if any("# /// script" in (repo / f).read_text(errors="replace") for f in files):
-            elsewhere.append("PEP 723 script blocks")
-        return Result([issue(
-            "DEPS", "deptry", "readiness", "no-dependency-list", "deps-unreadable" if elsewhere else "deps-none",
-            f"Dependencies are declared only in {', '.join(elsewhere)}, which deptry can't check" if elsewhere
-            else "No dependency list (pyproject.toml, requirements.txt, environment.yml): nobody can install it",
-            key="DEPS|declare", effort="S",
-            fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies)."
-                 + (" Self-contained PEP 723 scripts can dismiss this." if elsewhere else "")),
-            done_when="`cleanup.py measure` runs deptry without 'not measured'.")], {},
-            skipped="no pyproject.toml dependencies or requirements.txt")
+        return ["--config", repo / "pyproject.toml"]
+    if (repo / "requirements.txt").exists():
+        return ["--requirements-files", repo / "requirements.txt"]
+    return None
+
+
+def no_dependency_list(repo: Path, files: list) -> dict:
+    """High when nothing lists the dependencies; low when they are listed only where deptry can't read them."""
+    elsewhere = [n for n in ("environment.yml", "environment.yaml", "setup.py", "setup.cfg", "Pipfile")
+                 if (repo / n).exists()] + sorted(p.name for p in repo.glob("requirements?*.txt"))
+    if any("# /// script" in (repo / f).read_text(errors="replace") for f in files):
+        elsewhere.append("PEP 723 script blocks")
+    return issue(
+        "DEPS", "deptry", "readiness", "no-dependency-list", "deps-unreadable" if elsewhere else "deps-none",
+        f"Dependencies are declared only in {', '.join(elsewhere)}, which deptry can't check" if elsewhere
+        else "No dependency list (pyproject.toml, requirements.txt, environment.yml): nobody can install it",
+        key="DEPS|declare", effort="S",
+        fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies)."
+             + (" Self-contained PEP 723 scripts can dismiss this." if elsewhere else "")),
+        done_when="`cleanup.py measure` runs deptry without 'not measured'.")
+
+
+def deptry_deps(repo, files, index) -> Result:
+    source = deptry_source(repo)
+    if source is None:
+        return Result([no_dependency_list(repo, files)], {},
+                      skipped="no pyproject.toml dependencies or requirements.txt")
     with tempfile.TemporaryDirectory(prefix="cleanup-deptry-") as tmp:
         report = Path(tmp) / "deptry.json"
         p = run([uvx(), f"deptry@{TOOLS['deptry']}", repo, *source, "--package-module-name-map", DEPTRY_MAP,
@@ -60,15 +79,10 @@ def deptry_deps(repo, files, index) -> Result:
     for v in violations:
         code = v["error"]["code"]
         module = v["module"]
-        file = rel(repo, v["location"]["file"])
-        fixes = {"DEP001": f"Declare the package that provides `{module}` as a dependency.",
-                 "DEP002": f"Remove `{module}` from the dependencies if it is really unused.",
-                 "DEP003": f"`{module}` is only installed transitively: declare it directly.",
-                 "DEP004": f"`{module}` is a dev dependency but the code imports it: move it to the main dependencies."}
         out.append(issue(
             "DEP", "deptry", "readiness", code, "deps-unused" if code == "DEP002" else "deps-undeclared",
-            v["error"]["message"], file=file, symbol=module, line=v["location"]["line"],
-            fix=fixes.get(code, v["error"]["message"]), effort="S",
+            v["error"]["message"], file=rel(repo, v["location"]["file"]), symbol=module, line=v["location"]["line"],
+            fix=DEPTRY_FIXES[code].format(module) if code in DEPTRY_FIXES else v["error"]["message"], effort="S",
             done_when="deptry no longer reports it."))
     return Result(out, {"deps_missing": sum(v["error"]["code"] != "DEP002" for v in violations)})
 
