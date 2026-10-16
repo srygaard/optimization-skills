@@ -179,54 +179,65 @@ def family(spdx: str | None) -> str:
     return s
 
 
-def license_readme(repo, files, index) -> Result:
-    out = []
-    names = git(repo, "ls-tree", "--name-only", "HEAD").splitlines()
-    lic_files = [n for n in names if re.fullmatch(r"(?i)(?:licen[cs]e|copying)(?:\.(?:md|txt|rst))?", n)]
-    repo_license = None
-    if not lic_files:
-        out.append(issue(
+LICENSE_FILE = re.compile(r"(?i)(?:licen[cs]e|copying)(?:\.(?:md|txt|rst))?")
+SOURCE_SUFFIXES = {".py", ".c", ".cc", ".cpp", ".cu", ".cuh", ".h", ".hpp", ".sh", ".js", ".ts"}
+
+
+def license_file_issues(repo: Path, lic_file: str | None, repo_license: str | None) -> list:
+    """A missing or unrecognized LICENSE file, or one that pyproject.toml contradicts."""
+    if not lic_file:
+        return [issue(
             "LIC", "license", "license", "missing-license", "license-missing",
             "No LICENSE file: without one, nobody may legally use, copy or modify the code",
             key="LIC|missing", effort="S",
             fix=("Ask the user which license to use (MIT and Apache-2.0 are common for research code; "
                  "Apache-2.0 adds a patent grant). Add LICENSE at the repo root and set `license` in "
                  "pyproject.toml."),
-            done_when="A LICENSE file is at the root and `cleanup.py measure` recognizes it."))
-    else:
-        repo_license = detect_license((repo / lic_files[0]).read_text(errors="replace"))
-        if repo_license is None:
-            out.append(issue(
-                "LIC", "license", "license", "unrecognized-license", "license-unrecognized",
-                f"{lic_files[0]} doesn't match a common license (MIT, Apache-2.0, BSD, GPL, MPL)",
-                key="LIC|unrecognized", file=lic_files[0], effort="S",
-                fix="Check the text; a standard license text lets people and tools recognize it.",
-                done_when="`cleanup.py measure` recognizes the license."))
-        declared = _pyproject(repo).get("project", {}).get("license")
-        declared = declared.get("text") if isinstance(declared, dict) else declared
-        if repo_license and isinstance(declared, str) and family(declared) != family(repo_license):
-            out.append(issue(
-                "LIC", "license", "license", "license-mismatch", "license-mismatch",
-                f"pyproject.toml declares `{declared}` but {lic_files[0]} is {repo_license}",
-                key="LIC|mismatch", file="pyproject.toml", effort="S",
-                fix="Make pyproject's `license` match the LICENSE file.",
-                done_when="Both name the same license."))
-    metrics = {"license": repo_license or ("missing" if not lic_files else "unrecognized")}
+            done_when="A LICENSE file is at the root and `cleanup.py measure` recognizes it.")]
+    out = []
+    if repo_license is None:
+        out.append(issue(
+            "LIC", "license", "license", "unrecognized-license", "license-unrecognized",
+            f"{lic_file} doesn't match a common license (MIT, Apache-2.0, BSD, GPL, MPL)",
+            key="LIC|unrecognized", file=lic_file, effort="S",
+            fix="Check the text; a standard license text lets people and tools recognize it.",
+            done_when="`cleanup.py measure` recognizes the license."))
+    declared = _pyproject(repo).get("project", {}).get("license")
+    declared = declared.get("text") if isinstance(declared, dict) else declared
+    if repo_license and isinstance(declared, str) and family(declared) != family(repo_license):
+        out.append(issue(
+            "LIC", "license", "license", "license-mismatch", "license-mismatch",
+            f"pyproject.toml declares `{declared}` but {lic_file} is {repo_license}",
+            key="LIC|mismatch", file="pyproject.toml", effort="S",
+            fix="Make pyproject's `license` match the LICENSE file.",
+            done_when="Both name the same license."))
+    return out
 
+
+def header_license(top: str) -> str | None:
+    """The license family named in a file's first lines (lowercased): an SPDX identifier, or a license's words
+    in a header that mentions a license. MIT's words are too common to count without SPDX."""
+    if spdx := re.search(r"spdx-license-identifier:\s*([\w.+-]+)", top):
+        return family(spdx[1])
+    if "license" not in top and "licence" not in top:
+        return None
+    return next((fam for fam, pattern in HEADER_LICENSES if fam != "MIT" and re.search(pattern, top)), None)
+
+
+def third_party_issues(repo: Path, repo_license: str | None) -> list:
+    """Source files whose header names another license: usually vendored code, whose notice must stay."""
     vendored = {}
-    sources = [r for r in git(repo, "ls-files", "-z").split("\0")
-               if Path(r).suffix in {".py", ".c", ".cc", ".cpp", ".cu", ".cuh", ".h", ".hpp", ".sh", ".js", ".ts"}]
-    for rel in sources:
+    for name in git(repo, "ls-files", "-z").split("\0"):
+        if Path(name).suffix not in SOURCE_SUFFIXES:
+            continue
         try:
-            top = "\n".join((repo / rel).read_text(errors="replace").splitlines()[:40]).lower()
+            top = "\n".join((repo / name).read_text(errors="replace").splitlines()[:40]).lower()
         except OSError:
             continue
-        spdx = re.search(r"spdx-license-identifier:\s*([\w.+-]+)", top)
-        found = family(spdx[1]) if spdx else next(
-            (fam for fam, pattern in HEADER_LICENSES if fam != "MIT" and re.search(pattern, top)
-             and ("license" in top or "licence" in top)), None)
+        found = header_license(top)
         if found and found != family(repo_license):
-            vendored.setdefault(found, []).append(rel)
+            vendored.setdefault(found, []).append(name)
+    out = []
     for fam, paths in sorted(vendored.items()):
         out.append(issue(
             "LIC", "license", "license", "third-party-license", "license-third-party",
@@ -237,14 +248,22 @@ def license_readme(repo, files, index) -> Result:
                  "can't be relicensed as MIT or Apache-2.0; non-commercial code isn't open source) and "
                  "credit the original project in the README or a NOTICE file."),
             done_when="The user has confirmed the licenses are compatible (or the files are replaced)."))
+    return out
 
+
+def license_readme(repo, files, index) -> Result:
+    """The LICENSE file, files under another license, and the README."""
+    names = git(repo, "ls-tree", "--name-only", "HEAD").splitlines()
+    lic_file = next((n for n in names if LICENSE_FILE.fullmatch(n)), None)
+    repo_license = detect_license((repo / lic_file).read_text(errors="replace")) if lic_file else None
+    out = license_file_issues(repo, lic_file, repo_license) + third_party_issues(repo, repo_license)
     if not any(re.fullmatch(r"(?i)readme(?:\.\w+)?", n) for n in names):
         out.append(issue(
             "DOC", "license", "readiness", "missing-readme", "readme-missing", "No README at the repo root",
             key="DOC|readme", effort="M",
             fix="Add a README: what the code does, how to install it, a minimal quickstart, how to cite it.",
             done_when="README exists and its quickstart runs."))
-    return Result(out, metrics)
+    return Result(out, {"license": repo_license or ("unrecognized" if lic_file else "missing")})
 
 
 def count_suppressions(repo: Path, files: list) -> int:
