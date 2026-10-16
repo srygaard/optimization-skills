@@ -313,47 +313,58 @@ def vulture_rows(text: str) -> list:
     return rows
 
 
+def executed_lines(repo: Path) -> dict:
+    """{file: lines that ran}, from an optional coverage.py JSON report at the repo root (from any run)."""
+    if not (cov := repo / "coverage.json").exists():
+        return {}
+    return {Path(name).as_posix(): set(f.get("executed_lines", []))
+            for name, f in json.loads(cov.read_text()).get("files", {}).items()}
+
+
+def dead_candidate(m, index, refs: list, coverage: dict) -> dict:
+    """A vulture row with what decides it: the symbol, the files that name or mention it, whether it ran.
+    `unused` (nothing names it and it didn't run) is what dead-code LOC counts."""
+    file, line = Path(m["path"]).as_posix(), int(m["line"])
+    d = index.at_def_line(file, line)
+    qual = d[2] if d and m["name"] and d[2].endswith(m["name"]) else (m["name"] or index.qualname(file, line))
+    modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
+    # unreachable code can't be referenced
+    hits, mentions = _named_in(refs, qual.rsplit(".", 1)[-1], modules) if m["kind"] else ([], [])
+    ran = bool(coverage.get(file, set()) & runtime_lines(index, file, line))
+    return {"row": m, "file": file, "line": line, "lines": int(m["size"] or 1), "symbol": qual, "hits": hits,
+            "mentions": mentions, "ran": ran, "unused": not hits and not ran}
+
+
+def dead_issue(c: dict, with_coverage: bool) -> dict:
+    """Open, or dismissed when something names the symbol or its body ran."""
+    m, size = c["row"], c["lines"]
+    note = (f"referenced by name in {', '.join(c['hits'][:3])}" if c["hits"] else
+            "executed in the coverage run" if c["ran"] else "")
+    return issue(
+        "DEAD", "vulture", "dead-code", m["kind"] or "unreachable",
+        "dead-large" if size >= DEAD_HIGH_LINES else "dead-small",
+        f"{m['msg']} ({size} lines, vulture {m['conf']}% confidence)",
+        file=c["file"], symbol=c["symbol"], line=c["line"], end_line=c["line"] + size - 1,
+        evidence={"lines": size, "confidence": int(m["conf"]), "referenced_in": c["hits"][:5],
+                  "mentioned_in": c["mentions"][:5], "executed": c["ran"] if with_coverage else None},
+        status="dismissed" if note else "open", note=note, effort="S",
+        fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
+             "notebooks, shell scripts; files that mention its bare name are in `evidence.mentioned_in`), "
+             "then delete it."),
+        done_when="Deleted, and the import test and safety net pass.")
+
+
 def vulture_dead(repo, files, index) -> Result:
     if not files:
         return Result([], {"dead_code_loc": 0})
     p = run([uvx(), f"vulture@{TOOLS['vulture']}", *files, "--min-confidence", "60", "--sort-by-size"], cwd=repo)
     if p.returncode not in (0, 3):
         raise ToolError((p.stderr or p.stdout).strip()[-300:])
-    refs = _references(repo, files)
-    coverage = {}
-    if (cov := repo / "coverage.json").exists():  # optional: a coverage.py JSON report from any run
-        for name, f in json.loads(cov.read_text()).get("files", {}).items():
-            coverage[Path(name).as_posix()] = set(f.get("executed_lines", []))
-    total, out = 0, []
-    for m in vulture_rows(p.stdout):
-        # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
-        # training_step, nn.Module overrides) that vulture can't see being called
-        if m["kind"] in ("method", "property", "variable", "attribute", "import"):
-            continue
-        file, line, size = Path(m["path"]).as_posix(), int(m["line"]), int(m["size"] or 1)
-        d = index.at_def_line(file, line)
-        qual = d[2] if d and m["name"] and d[2].endswith(m["name"]) else (m["name"] or index.qualname(file, line))
-        name = qual.rsplit(".", 1)[-1]
-        modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
-        # unreachable code can't be referenced
-        hits, mentions = _named_in(refs, name, modules) if m["kind"] else ([], [])
-        ran = bool(coverage.get(file, set()) & runtime_lines(index, file, line))
-        if not hits and not ran:
-            total += size
-        if size < MIN_DEAD_LINES:
-            continue
-        note = (f"referenced by name in {', '.join(hits[:3])}" if hits else
-                "executed in the coverage run" if ran else "")
-        out.append(issue(
-            "DEAD", "vulture", "dead-code", m["kind"] or "unreachable",
-            "dead-large" if size >= DEAD_HIGH_LINES else "dead-small",
-            f"{m['msg']} ({size} lines, vulture {m['conf']}% confidence)",
-            file=file, symbol=qual, line=line, end_line=line + size - 1,
-            evidence={"lines": size, "confidence": int(m["conf"]), "referenced_in": hits[:5],
-                      "mentioned_in": mentions[:5], "executed": ran if coverage else None},
-            status="dismissed" if note else "open", note=note, effort="S",
-            fix=("Confirm nothing references it (yaml `_target_`/`target:` strings, registries, getattr, "
-                 "notebooks, shell scripts; files that mention its bare name are in `evidence.mentioned_in`), "
-                 "then delete it."),
-            done_when="Deleted, and the import test and safety net pass."))
-    return Result(out, {"dead_code_loc": total})
+    refs, coverage = _references(repo, files), executed_lines(repo)
+    # methods and properties are skipped: in ML code they are mostly framework hooks (Lightning's
+    # training_step, nn.Module overrides) that vulture can't see being called
+    found = [dead_candidate(m, index, refs, coverage) for m in vulture_rows(p.stdout)
+             if m["kind"] not in ("method", "property", "variable", "attribute", "import")]
+    total = sum(c["lines"] for c in found if c["unused"])
+    return Result([dead_issue(c, bool(coverage)) for c in found if c["lines"] >= MIN_DEAD_LINES],
+                  {"dead_code_loc": total})
