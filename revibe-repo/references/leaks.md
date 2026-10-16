@@ -35,7 +35,7 @@ service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded 
   `.aws/credentials`.
 - **Internal references** (ids starting with `internal-`): Mila paths (`/network/scratch`, `/home/mila`),
   DRAC paths (`/project/def-…`), SLURM accounts (`#SBATCH --account`, but not a template such as
-  `{account}`, and DRAC allocation names such as `def-prof` anywhere), HPC filesystem paths (`/scratch/<user>/…`,
+  `{account}`, and DRAC allocation names such as `def-<prof>` anywhere), HPC filesystem paths (`/scratch/<user>/…`,
   `/work1/<group>/<user>`, `/lustre…`, `/gpfs…`), lab hostnames and emails (not public `docs.`/`www.`
   sites), wandb entities, and absolute home paths.
 
