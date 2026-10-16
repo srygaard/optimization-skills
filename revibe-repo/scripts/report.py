@@ -4,40 +4,25 @@ import shutil
 from pathlib import Path
 
 from state import Cleanup, Severity
-from tools import file_length, policies, scb_check
+from tools import policies, scorecard_metrics
 
 
 # --- scorecard -------------------------------------------------------------------------------------
 
 def scorecard(snaps: list) -> list:
     """Rows of [metric, value per snapshot, delta (with two snapshots), reference] for every metric
-    that any of the snapshots measured. measure, compare and report all print these rows."""
-    cc = scb_check.TOOL.settings["cc_threshold"]
-    lengths = file_length.TOOL.settings
-    metrics = (  # key, label, format
-        ("loc", "LOC", "{:,}"), ("verbosity", "Verbosity", "{:.3f}"), ("erosion", "Erosion", "{:.3f}"),
-        ("cog_erosion", "Cognitive erosion", "{:.3f}"), ("violation_pct", "Violation %", "{:.3f}"),
-        ("clone_ratio", "Clone Ratio", "{:.3f}"), ("cc_over_10", f"Functions CC > {cc}", "{:,}"),
-        ("dead_code_loc", "Dead code LOC", "{:,}"), ("red_flags_open", "Red flags open", "{:,}"),
-        ("leaks_open", "Leaks open", "{:,}"), ("vulnerable_deps", "Vulnerable deps", "{:,}"),
-        ("deps_missing", "Dependency problems", "{:,}"), ("suppressions", "Suppressions", "{:,}"),
-        ("avg_file_lines", "Avg file length", "{:,}"),
-        ("files_over_500", f"Files > {lengths['warn_file_lines']} lines", "{:,}"),
-        ("files_over_1000", f"Files > {lengths['long_file_lines']} lines", "{:,}"), ("globals", "Globals", "{:,}"),
-    )
-    # SlopCodeBench (arXiv 2603.24755): maintained human Python repos vs agent-written code. Only these two
-    # are comparable with scb-check 0.2.0; its Violation % and Clone Ratio are measured differently.
-    reference = {"verbosity": (0.15, 0.33), "erosion": (0.31, 0.68)}
+    that any of the snapshots measured: the measure steps' in step order, then the open-issue counts.
+    measure, compare and report all print these rows."""
     rows = []
-    for key, label, form in metrics:
-        vals = [s["metrics"].get(key) for s in snaps]
-        if all(v is None for v in vals):
+    for m in (*scorecard_metrics(), *Cleanup.metrics):
+        vals = [s["metrics"].get(m.key) for s in snaps]
+        if not m.label or all(v is None for v in vals):
             continue
-        row = [label, *("-" if v is None else form.format(v) for v in vals)]
+        row = [m.label, *("-" if v is None else m.form.format(v) for v in vals)]
         if len(snaps) == 2:
             b, n = vals
             row.append("" if b is None or n is None else f"{n - b:+,}" if isinstance(b, int) else f"{n - b:+.3f}")
-        ref = reference.get(key)
+        ref = m.reference
         rows.append(row + [f"{ref[0]} / {ref[1]}" if ref else ""])
     return rows
 
@@ -77,17 +62,12 @@ def cmd_compare(a):
 
 def comparison_warnings(base: dict, after: dict) -> list:
     """Regressions in absolute terms. Ratios are not used: deleting clean code raises them on its own."""
-    cc = scb_check.TOOL.settings["cc_threshold"]
-    long_file = file_length.TOOL.settings["long_file_lines"]
     out = []
-    for key, label in (("verbosity_flagged_loc", "verbosity-flagged LOC"),
-                       ("high_cc_mass", f"mass in functions with CC > {cc}"),
-                       ("suppressions", "suppressions"), ("files_over_1000", f"files over {long_file} lines"),
-                       ("globals", "module-level globals")):
-        b = base["metrics"].get(key)
-        n = after["metrics"].get(key)
-        if b is not None and n is not None and n > b:
-            out.append(f"{label} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings")
+    for m in scorecard_metrics():
+        b = base["metrics"].get(m.key)
+        n = after["metrics"].get(m.key)
+        if m.warn and b is not None and n is not None and n > b:
+            out.append(f"{m.warn} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings")
     if base["tools"] != after["tools"]:
         out.append("tool versions differ between the snapshots: numbers may not be comparable")
     if base["scope"] != after["scope"]:

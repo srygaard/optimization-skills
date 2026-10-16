@@ -22,23 +22,39 @@ class Result(NamedTuple):
     notes: dict | None = None  # metric -> why it is incomplete
 
 
+class Metric(NamedTuple):
+    """A number in a tool's Result, as the scorecard shows it and `compare` checks it."""
+
+    key: str  # its key in Result.metrics and the snapshots
+    label: str = ""  # its scorecard row; "" keeps it off the scorecard
+    form: str = "{:,}"
+    reference: tuple | None = None  # (maintained human code, agent code), from SlopCodeBench
+    warn: str = ""  # what `compare` calls it when it goes up; "" when a rise is no regression
+
+
 @dataclass(frozen=True)
 class Tool:
-    """A tool's name, where it comes from, the skill's settings for it, and its severity policy.
+    """A tool's name, where it comes from, the skill's settings for it, its severity policy and its metrics.
 
     `policy` is the one place the tool's severities are set: every issue it reports names a row, and `report`
-    prints all of them into report.md, so the docs point here instead of restating them. A row's `when` names
-    the settings it depends on in braces, e.g. "{min_dead_lines}".
+    prints all of them into report.md, so the docs point here instead of restating them. A row's `when`, and a
+    metric's label and warning, name the settings they depend on in braces, e.g. "{min_dead_lines}".
     """
 
     name: str  # the `source` of its issues: merge() closes an open issue its source no longer finds
     policy: dict  # policy key -> (severity, when)
     package: str = ""  # its PyPI distribution, pinned in cleanup.py's script header; "" when not from PyPI
     settings: dict = field(default_factory=dict)  # thresholds and pins its code reads, by name
+    metrics: tuple = ()  # the Metric of each scorecard number its measure step reports, in scorecard order
 
     def severity_rules(self) -> dict:
         """The policy with each row's `when` filled in from the settings, as report.md prints it."""
         return {key: (severity, when.format(**self.settings)) for key, (severity, when) in self.policy.items()}
+
+    def scorecard_metrics(self) -> list:
+        """The metrics with their labels and warnings filled in from the settings."""
+        return [m._replace(label=m.label.format(**self.settings), warn=m.warn.format(**self.settings))
+                for m in self.metrics]
 
     def issue(self, prefix: str, category: str, rule: str, policy: str, summary: str, *, file="", symbol="", key="",
               line=None, end_line=None, evidence=None, fix="", done_when="", effort="S", status="open",

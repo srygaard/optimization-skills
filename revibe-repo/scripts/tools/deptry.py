@@ -9,7 +9,7 @@ from pathlib import Path
 from utils.paths import rel
 from utils.process import run
 from utils.pyproject import read_pyproject
-from tools.base import Result, Tool, ToolError
+from tools.base import Metric, Result, Tool, ToolError
 
 TOOL = Tool(
     name="deptry",
@@ -21,6 +21,7 @@ TOOL = Tool(
         "deps-unreadable": ("low", "dependencies listed only where deptry can't read them (environment.yml, "
                                    "setup.py, PEP 723)"),
     },
+    metrics=(Metric("deps_missing", "Dependency problems"),),
 )
 
 

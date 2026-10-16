@@ -7,6 +7,7 @@ import json
 from enum import IntEnum
 from pathlib import Path
 
+from tools.base import Metric
 from utils.git import head, repo_root
 
 
@@ -30,6 +31,9 @@ def now() -> str:
 
 class Cleanup:
     """A repo's .cleanup/ folder and its issues.json, loaded and checked."""
+
+    # the scorecard rows count_issues sets, after the measure steps' own
+    metrics = (Metric("red_flags_open", "Red flags open"), Metric("leaks_open", "Leaks open"))
 
     def __init__(self, path: str):
         self.repo = repo_root(path)

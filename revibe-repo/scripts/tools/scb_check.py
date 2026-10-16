@@ -11,7 +11,7 @@ from pathlib import Path
 
 from utils.paths import rel
 from scope import Def
-from tools.base import Result, Tool, ToolError
+from tools.base import Metric, Result, Tool, ToolError
 
 TOOL = Tool(
     name="scb-check",
@@ -30,6 +30,20 @@ TOOL = Tool(
         "medium_dup_lines": 20,  # duplicate-group weight lines x (copies - 1) from which it is medium
         "min_clone_lines": 10,  # smaller duplicate blocks still count in Clone Ratio but get no issue
     },
+    # references: SlopCodeBench (arXiv 2603.24755), maintained human Python repos / agent-written code. Only
+    # Verbosity and Erosion compare: scb-check 0.2.0 measures Violation % and Clone Ratio differently.
+    metrics=(
+        Metric("loc", "LOC"),
+        Metric("verbosity", "Verbosity", "{:.3f}", reference=(0.15, 0.33)),
+        Metric("erosion", "Erosion", "{:.3f}", reference=(0.31, 0.68)),
+        Metric("cog_erosion", "Cognitive erosion", "{:.3f}"),
+        Metric("violation_pct", "Violation %", "{:.3f}"),
+        Metric("clone_ratio", "Clone Ratio", "{:.3f}"),
+        Metric("cc_over_10", "Functions CC > {cc_threshold}"),
+        # the absolute amounts behind the ratios: deleting clean code raises a ratio without adding slop
+        Metric("verbosity_flagged_loc", warn="verbosity-flagged LOC"),
+        Metric("high_cc_mass", warn="mass in functions with CC > {cc_threshold}"),
+    ),
 )
 
 
@@ -77,7 +91,6 @@ def measure(scope) -> Result:
         loc=m["total_loc"], cc_over_10=m["high_cc_functions"], verbosity=round(m["verbosity"], 4),
         erosion=round(m["erosion"], 4), cog_erosion=round(m["cog_erosion"], 4),
         violation_pct=round(m["ast_grep_flagged_loc"] / loc, 4), clone_ratio=round(m["clone_loc"] / loc, 4),
-        # absolute amounts behind the ratios: deleting clean code raises a ratio without adding slop
         verbosity_flagged_loc=m["verbosity_flagged_loc"], high_cc_mass=round(m["high_cc_mass"], 1))
     # no ast-grep binary worked: the slop rules silently counted nothing
     return Result(out, metrics, notes={"violation_pct": "ast-grep did not run"} if "ast-grep" in warnings else None)

@@ -156,7 +156,7 @@ Edit `.cleanup/issues.json` directly. Each call is a yes/no decision with a reas
 scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1. The modules it imports sit next to it:
 `state` (issues.json, its severity scale and the snapshots), `scope` (the files in scope), `leaks`,
 `measure`, `report`, `tools/` (one module per tool) and `utils/` (helpers, one module per purpose). Each tool module starts with its `TOOL`
-(name, PyPI package, settings, severity policy), then runs the tool and turns what it finds into issues;
+(name, PyPI package, settings, severity policy, scorecard metrics), then runs the tool and turns what it finds into issues;
 `tools/base.py` defines `Tool`, which builds every issue, the `Result` every tool returns, and `Step`, the
 protocol of a measure step: `measure(scope) -> Result`, where the `Scope` (`scope.py`) holds the repo, the
 files in scope and what they define. The leak tools have `scan` instead.
