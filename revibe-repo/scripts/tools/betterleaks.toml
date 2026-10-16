@@ -42,6 +42,11 @@ regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mi
 keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
 filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`])'''  # public documentation and websites
 
+[[rules.allowlists]]  # authors' and maintainers' emails in pyproject.toml are meant to be published; hosts aren't
+condition = "AND"
+paths = ['''(?:^|/)pyproject\.toml$''']
+regexes = ['''@''']
+
 [[rules]]
 id = "internal-wandb-entity"
 regex = '''(?i)(?:wandb_entity["'\s]*[:=]\s*["']?|entity\s*=\s*["'])([\w-]{2,})'''
