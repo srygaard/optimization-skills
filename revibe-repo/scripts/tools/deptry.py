@@ -6,8 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ..common import pyproject, rel, run
-from .base import Result, Tool, ToolError
+from common import pyproject, rel, run
+from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(
     name="deptry",

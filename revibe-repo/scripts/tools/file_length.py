@@ -1,6 +1,6 @@
 """Source file length, from the code index."""
 
-from .base import Result, Tool
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="file-length",

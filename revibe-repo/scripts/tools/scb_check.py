@@ -9,8 +9,8 @@ import tempfile
 from importlib.metadata import distribution
 from pathlib import Path
 
-from ..common import rel
-from .base import Result, Tool, ToolError
+from common import rel
+from tools.base import Result, Tool, ToolError
 
 TOOL = Tool(
     name="scb-check",

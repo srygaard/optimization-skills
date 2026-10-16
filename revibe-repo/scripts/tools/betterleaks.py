@@ -15,8 +15,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from ..common import git, run
-from .base import Tool
+from common import git, run
+from tools.base import Tool
 
 TOOL = Tool(
     name="betterleaks",
@@ -76,7 +76,7 @@ def executable() -> Path:
             "set BETTERLEAKS=/path/to/betterleaks")
     cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     version = TOOL.settings["version"]
-    cache = cache / "unslop-repo" / f"betterleaks-{version}"
+    cache = cache / "revibe-repo" / f"betterleaks-{version}"
     exe = cache / "betterleaks"
     if exe.is_file():
         return exe

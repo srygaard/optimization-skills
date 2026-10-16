@@ -3,12 +3,12 @@
 import shutil
 from pathlib import Path
 
-from .common import SCRIPTS, Severity, repo_root
-from .state import (
+from common import SCRIPTS, Severity, repo_root
+from state import (
     latest_snapshot, leak_scan_current, load_issues, load_snapshot, open_issues, recount_head_snapshot,
     require_leak_scan, save_issues, state_dir,
 )
-from .tools import file_length, policies, scb_check
+from tools import file_length, policies, scb_check
 
 
 # --- scorecard -------------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def severity_rules() -> list:
     """Every tool's policy as a list, so an agent working from the report sees why each issue has its severity."""
     rows = policies().values()
     return ["", "## Severity rules", "",
-            "Set by each tool's `TOOL` policy in unslop/tools/; red flags and bugs you add keep the severity you "
+            "Set by each tool's `TOOL` policy in tools/; red flags and bugs you add keep the severity you "
             "give them.", "",
             *(f"- **{sev.name}:** " + "; ".join(when for s, when in rows if s == sev.name) for sev in Severity)]
 
@@ -222,9 +222,11 @@ def cmd_report(a):
     recount_head_snapshot(d, data, repo)
     (d / "report.md").write_text(render_report(repo, data, d))
     if SCRIPTS != d.resolve():  # lets another agent re-measure without the skill
-        shutil.copy2(SCRIPTS / "cleanup.py", d)
-        shutil.rmtree(d / "unslop", ignore_errors=True)  # a module renamed since the last copy must not linger
-        shutil.copytree(SCRIPTS / "unslop", d / "unslop", ignore=shutil.ignore_patterns("__pycache__"))
+        for f in SCRIPTS.glob("*.py"):
+            if not f.name.startswith("test_"):
+                shutil.copy2(f, d)
+        shutil.rmtree(d / "tools", ignore_errors=True)  # a module renamed since the last copy must not linger
+        shutil.copytree(SCRIPTS / "tools", d / "tools", ignore=shutil.ignore_patterns("__pycache__"))
     counts = " · ".join(f"{len(open_issues(data, s.name))} {s.name}" for s in Severity)
     print(f"release: {data['release_status'].upper()}  ·  open {counts}")
     print(f"-> {d / 'report.md'}")

@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .common import Severity, head, now
+from common import Severity, head, now
 
 
 # --- issues.json -----------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Module-level globals, from the code index: constants and state a module keeps outside its functions."""
 
-from .base import Result, Tool
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="globals",

@@ -1,5 +1,5 @@
 """The severity scale, the skill's own paths, and helpers shared by every command. Severities are set by
-each tool's `TOOL` in unslop/tools/."""
+each tool's `TOOL` in tools/."""
 
 import datetime as dt
 import subprocess
@@ -8,7 +8,7 @@ from enum import IntEnum
 from pathlib import Path
 
 
-SCRIPTS = Path(__file__).resolve().parent.parent  # holds cleanup.py and unslop/
+SCRIPTS = Path(__file__).resolve().parent  # holds cleanup.py, the modules it imports, and tools/
 
 
 class Severity(IntEnum):

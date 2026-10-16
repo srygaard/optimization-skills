@@ -2,8 +2,8 @@
 
 import re
 
-from ..common import git
-from .base import Result, Tool
+from common import git
+from tools.base import Result, Tool
 
 TOOL = Tool(
     name="license",

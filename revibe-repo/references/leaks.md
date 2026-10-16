@@ -15,7 +15,7 @@ delete it. That is why the scan is mandatory and runs first.
 
 ## Rules
 
-`scripts/unslop/tools/betterleaks.toml` adds a few rules to Betterleaks' ~460 built-in ones. The
+`scripts/tools/betterleaks.toml` adds a few rules to Betterleaks' ~460 built-in ones. The
 built-ins already cover OpenAI, Anthropic, Hugging Face, Weights & Biases, AWS, GCP (incl.
 service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded passwords. Their
 `generic-api-key` rule catches Kaggle, Comet and Neptune keys as possible secrets. The file adds:
@@ -39,7 +39,7 @@ To change the file itself:
 
 ## Severity
 
-Severities come from the `TOOL` policy in `unslop/tools/betterleaks.py` and `unslop/tools/large_files.py`, and
+Severities come from the `TOOL` policy in `tools/betterleaks.py` and `tools/large_files.py`, and
 every report.md ends with the list. A rule's
 confidence separates a certain credential (critical, wherever it is) from a possible one (high, to
 review); internal references and large files matter most while they are at HEAD.
@@ -78,15 +78,15 @@ lives in a temp dir that is deleted at once.
 
 ## Betterleaks binary
 
-`unslop/tools/betterleaks.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
+`tools/betterleaks.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
 x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the pinned value, and
-caches it in `~/.cache/unslop-repo/` (or `$XDG_CACHE_HOME`).
+caches it in `~/.cache/revibe-repo/` (or `$XDG_CACHE_HOME`).
 
 - **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
   `BETTERLEAKS=/path/to/betterleaks`.
 - **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
   verify the signature, then update `version` and the four `sha256` values in the `TOOL` settings of
-  `unslop/tools/betterleaks.py`:
+  `tools/betterleaks.py`:
 
   ```bash
   uvx sigstore verify github --bundle checksums.txt.sigstore.json --repository betterleaks/betterleaks \

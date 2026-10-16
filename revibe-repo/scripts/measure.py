@@ -4,15 +4,15 @@ import re
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
-from .common import git, head, now, repo_root
-from .report import print_scorecard
-from .scope import CodeIndex, shipped_files
-from .state import (
+from common import git, head, now, repo_root
+from report import print_scorecard
+from scope import CodeIndex, shipped_files
+from state import (
     count_issues, load_issues, merge, open_issues, require_leak_scan, save_issues, state_dir,
     write_snapshot,
 )
-from .tools import ANALYZERS, MEASURE, vulture
-from .tools.base import ToolError
+from tools import ANALYZERS, MEASURE, vulture
+from tools.base import ToolError
 
 
 # --- measure ---------------------------------------------------------------------------------------
