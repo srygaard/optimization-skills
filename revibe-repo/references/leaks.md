@@ -1,0 +1,113 @@
+# Leaks: secrets and internal references
+
+A credential that reaches a public repo is compromised: forks, clones and caches keep it after you
+delete it. That is why the scan is mandatory and runs first.
+
+## What `cleanup.py leaks` scans
+
+- **Every commit, once:** the first scan reads every commit on every ref (`betterleaks git`), so a key
+  deleted three years ago is still found. Later scans read only the commits added since (those not
+  reachable from the tips the last scan read), so a secret committed and removed between two scans is
+  still found.
+- **The files at HEAD, every time:** they say what is still at HEAD and what is only in the history.
+- **Issues carry over:** an issue found before keeps its ID, status and evidence. An internal reference
+  matches by rule and file, a credential by a commit it was found in: one at HEAD is traced to the
+  commit that added its line (`git blame`), so moving the file or editing around it changes nothing. One
+  that has left HEAD comes back "only in history" (an internal reference drops to low, a credential
+  stays critical) and is never marked fixed, since the history still holds it. A credential on a line
+  rewritten since is reported again, as new.
+- **Every commit again** when the rules change (a new `--internal` pattern, a new rules file or
+  Betterleaks version), when a commit read before has left the history (rewritten, amended, or on a
+  deleted branch), or with `leaks --history`. Issues no commit holds any more are then marked fixed.
+- **"At HEAD"** means Betterleaks finds it in HEAD's files, archives included, under its path there.
+- **Not scanned:** untracked files (the script warns; commit or ignore them and re-run), Git LFS content,
+  submodules, and anything outside git (wandb runs, checkpoints on disk, Hugging Face model cards).
+
+## Rules
+
+`scripts/tools/betterleaks.toml` adds a few rules to Betterleaks' ~460 built-in ones. The
+built-ins already cover OpenAI, Anthropic, Hugging Face, Weights & Biases, AWS, GCP (incl.
+service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded passwords. Their
+`generic-api-key` rule catches Kaggle, Comet and Neptune keys as possible secrets. The file adds:
+
+- **`.netrc` password entries**, which `wandb login` writes.
+- **Sensitive file names**, as possible credentials: `.env`, `.netrc`, `kaggle.json`, SSH keys, `*.pem`,
+  `.aws/credentials`.
+- **Internal references** (ids starting with `internal-`): Mila paths (`/network/scratch`, `/home/mila`),
+  DRAC paths (`/project/def-…`), SLURM accounts (`#SBATCH --account`, but not a template such as
+  `{account}`, and DRAC allocation names such as `def-<prof>` anywhere), HPC filesystem paths (`/scratch/<user>/…`,
+  `/work1/<group>/<user>`, `/lustre…`, `/gpfs…`), lab hostnames and emails (not public `docs.`/`www.`
+  sites, nor emails in `pyproject.toml`, where authors list them to publish them), wandb entities, and
+  absolute home paths.
+
+Add repo-specific patterns with `--internal REGEX` (Go RE2 syntax, no lookarounds); they are remembered.
+To change the file itself:
+- **The id and confidence set the severity.** An id starting with `internal-` makes a rule internal.
+  Otherwise `confidence = "low"` makes it a possible credential, and no confidence a certain one.
+- **Capture paths without their leading `/`.** The built-in global filter drops matches that are whole
+  `/home/...` or `/Users/...` paths.
+- **Use a `filter` expression** (true means drop the finding). Betterleaks 1.9 doesn't apply
+  `[[rules.allowlists]]`.
+- **Check it:** `betterleaks config check --config betterleaks.toml`.
+
+## Severity
+
+Severities are set where `tools/__init__.py` creates `Betterleaks`, and every report.md ends with the
+list. A rule's confidence separates a certain credential (critical, wherever it is) from a possible one
+(high, to review); internal references matter most while they are at HEAD.
+
+Large files are not part of this scan: `measure` checks the files at HEAD (over 5 MB is high). One
+removed from HEAD stays in the history until a fresh squashed history (or a rewrite) drops it.
+
+A credential is one issue wherever it appears, because it is rotated once. Internal references are one
+issue per rule and file. Only a known public prefix (`ghp_`, `hf_`, `sk-`) and the length of a secret are ever
+shown, and issue IDs come from where it first appeared, not from its value. The raw Betterleaks report
+lives in a temp dir that is deleted at once.
+
+## Triage
+
+- Look at the location (`file`, `line`, `evidence.locations`); never print the matched value.
+- Typical false positives in ML repos: dataset checksums, git SHAs in configs, wandb run IDs, base64
+  test fixtures, example keys in docs.
+- **False positive:** set `status` to `dismissed` with a `note`. That is all the audit needs: it
+  ignores `gitleaks:allow`/`betterleaks:allow` comments and the repo's `.betterleaksignore` and
+  `.gitleaksignore`, because a key waved past a pre-commit hook is exactly what it looks for. Put the
+  issue's `evidence.fingerprints` in `.betterleaksignore` only for the hook you add in step 4 below.
+
+## Remediation, in this order
+
+1. **Rotate first.** The user revokes or rotates every confirmed credential at its provider. The agent
+   lists rule, location and provider; it can't do this step. Anything ever pushed to any remote,
+   including a private one, is compromised.
+2. **Remove it from HEAD.** Read secrets from environment variables; add a `.env.example` and gitignore
+   `.env`. Replace internal paths with config values or CLI arguments.
+3. **Decide on history.** Ask the user early; it changes which findings matter.
+   - **Fresh, squashed history (recommended):** publish a new repo whose first commit is the cleaned
+     tree. History-only findings (except rotated credentials) then don't ship.
+   - **Rewrite history:** `uvx git-filter-repo --replace-text expressions.txt` (or `--path` to drop
+     large files), only with the user's explicit approval. Rewriting changes every SHA; forks and
+     GitHub's caches keep the old objects. The agent never force-pushes.
+4. **Prevent recurrence:** a secret-scanning pre-commit hook (`betterleaks git --pre-commit --staged`),
+   a CI job running the same scan, and GitHub push protection once the repo is public.
+5. **Re-scan** with `cleanup.py leaks`: after a rewrite it reads every commit again by itself.
+
+## Betterleaks binary
+
+`tools/betterleaks.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
+x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the pinned value, and
+caches it in `~/.cache/revibe-repo/` (or `$XDG_CACHE_HOME`).
+
+- **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
+  `BETTERLEAKS=/path/to/betterleaks`.
+- **Bumping the version:** download the new release's `checksums.txt` and `checksums.txt.sigstore.json`,
+  verify the signature, then update the `version` and the four `sha256` values of the `Betterleaks` class in
+  `tools/betterleaks.py`:
+
+  ```bash
+  uvx sigstore verify github --bundle checksums.txt.sigstore.json --repository betterleaks/betterleaks \
+    --cert-identity "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+    checksums.txt
+  ```
+
+- **Never pass `--validation`.** It sends candidate secrets to provider APIs to test them. Every
+  confirmed credential gets rotated anyway, so knowing whether it is live changes nothing.

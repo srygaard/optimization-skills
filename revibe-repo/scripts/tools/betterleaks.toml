@@ -1,0 +1,59 @@
+# Rules added to Betterleaks' built-ins for ML research repos. An id starting with "internal-" marks an
+# internal reference, and a low-confidence rule a possible credential. Keywords (lowercase) only make the
+# scan faster. Before editing, read references/leaks.md.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "netrc-password"  # `wandb login` writes these
+regex = '''(?s)\bmachine\s+\S+\s+login\s+\S+\s+password\s+(\S{8,})'''
+keywords = ["machine"]
+
+[[rules]]
+id = "sensitive-file"
+path = '''(?:^|/)(?:\.env(?:\.(?:local|dev|development|prod|production|staging|test))?|[._]netrc|kaggle\.json|id_(?:rsa|dsa|ecdsa|ed25519)|[^/]+\.pem|\.aws/credentials)$'''
+confidence = "low"
+
+[[rules]]
+id = "internal-mila-path"
+regex = '''/((?:network/(?:scratch|projects|datasets|weights|archive)|home/mila)/[\w./-]+)'''
+keywords = ["/network/", "/home/mila/"]
+
+[[rules]]
+id = "internal-drac-path"
+regex = '''/((?:project|projects|scratch|nearline)/(?:def|rrg|ctb)-[\w./-]+)'''
+keywords = ["def-", "rrg-", "ctb-"]
+
+[[rules]]
+id = "internal-slurm-account"  # an #SBATCH account (not a template like {account} or $ACCT), or a DRAC allocation name
+regex = '''#SBATCH\s+(?:-A|--account)[=\s]+([^\s{$<]\S*)|(?:^|[^\w/.-])((?:def|rrg|ctb|aip)-[a-z][\w-]*)'''
+keywords = ["#sbatch", "def-", "rrg-", "ctb-", "aip-"]
+
+[[rules]]
+id = "internal-cluster-path"  # HPC filesystems: /scratch/<user>/..., /work1/<group>/<user>, /lustre..., /gpfs...
+regex = '''(?:^|[^\w.-])/((?:scratch|work\d*|lustre\d*|gpfs)/[\w.-]+/[\w./-]+)'''
+keywords = ["/scratch/", "/work", "/lustre", "/gpfs"]
+filter = '''matchesAny(finding["secret"], [`/(?:my|your)[-_]`, `/(?:user|username|USER)(?:/|$)`])'''
+
+[[rules]]
+id = "internal-host-or-email"
+regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
+keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
+filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`])'''  # public documentation and websites
+
+[[rules.allowlists]]  # authors' and maintainers' emails in pyproject.toml are meant to be published; hosts aren't
+condition = "AND"
+paths = ['''(?:^|/)pyproject\.toml$''']
+regexes = ['''@''']
+
+[[rules]]
+id = "internal-wandb-entity"
+regex = '''(?i)(?:wandb_entity["'\s]*[:=]\s*["']?|entity\s*=\s*["'])([\w-]{2,})'''
+keywords = ["entity"]
+
+[[rules]]
+id = "internal-home-path"
+regex = '''/((?:home|Users)/[a-z][\w.-]{0,31}/[\w./-]+)'''
+keywords = ["/home/", "/users/"]
+filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name)/`])'''
