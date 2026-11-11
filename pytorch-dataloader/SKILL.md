@@ -6,9 +6,9 @@ description: >-
   eval slower than train, slow time to first step, worker host-memory blowups.
   Use when tuning num_workers, prefetch_factor, pin_memory, non_blocking,
   persistent_workers or in_order; when next() wait may be a CUDA sync; when
-  samples come from mmap, Arrow / HF datasets, LMDB or shards on network
-  storage (Lustre, BeeGFS, VAST/NFS; Mila and Alliance/DRAC clusters) or are
-  staged to $SLURM_TMPDIR; when data outgrows page cache or local disk; for
+  samples come from mmap, Arrow / HF datasets, LMDB, HDF5, .npy or shards on
+  network storage (Lustre, BeeGFS, VAST/NFS; Mila and Alliance/DRAC clusters)
+  or are staged to $SLURM_TMPDIR; when data outgrows page cache or local disk; for
   chunk shuffling or shuffle buffers; when scaling to more nodes or faster
   GPUs; or when one DDP rank waits on another's late batch.
 ---
@@ -26,34 +26,36 @@ Time how long the loop blocks in `next()`, every step, on every rank:
 
 ```python
 import time
+from collections import deque
 
 
-class TimedIterator:
-    """Records how long each next() blocks, in ms."""
-
-    def __init__(self, iterable):
-        self._it = iter(iterable)
-        self.waits_ms = []
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
+def timed(iterable, waits_ms):
+    """Yields from iterable, appending each wait in ms after the first."""
+    t0 = None
+    for item in iterable:
+        if t0 is not None:
+            wait_ms = (time.perf_counter() - t0) * 1e3
+            waits_ms.append(wait_ms)
+        yield item
         t0 = time.perf_counter()
-        item = next(self._it)
-        self.waits_ms.append((time.perf_counter() - t0) * 1e3)
-        return item
+
+
+waits_ms = deque(maxlen=1_000)
+for batch in timed(loader, waits_ms):
+    ...
 ```
 
-Wrap what the loop actually consumes (after `accelerate.prepare` or any
-device-placement wrapper). Record step wall time beside it; drop each iterator's
-first `next()`. On long runs, log each interval's mean, p90 and max and then clear
-`waits_ms`; a capped deque would silently drop old stalls and the run's max.
+Wrap what the loop actually consumes, and record step wall time beside it. The
+deque keeps only the latest `maxlen` waits, so log their mean, p90 and max at
+least every `maxlen` steps, or a stall is evicted before it is reported.
 
 - **Wait share = Σwait / Σstep.** Under ~1%, a faster loader won't raise
   throughput. A perfect loader buys at most Σstep / (Σstep − Σwait).
 - **Read mean, p90 and max, not the median.** Prefetch keeps the median near
   zero whenever the queue is ahead, even when the mean is large.
+- **Leave warm-up out.** `timed` skips the first `next()`, which includes
+  worker startup; leave that step out of step times too. If early steps run
+  long (compilation), clear both after them.
 - **Under DDP, a late batch on one rank shows up on the others as all-reduce
   time.** Check every rank; take the per-step max.
 - **Measure train and eval separately.** Eval has no backward, so its shorter
@@ -86,8 +88,9 @@ means CPU-bound: add workers, or move the work offline (pre-tokenize,
 pre-decode). Workers needed ≥ (read + collate per batch) ÷ step time, plus
 headroom.
 
-More workers fix chronic and periodic starvation; a deeper buffer fixes tail
-stalls. Neither fixes the other.
+More workers fix chronic starvation and a pool that is too slow. A deeper buffer
+fixes tail stalls. One late worker is what `in_order=False` is for (§3). None of
+them fixes the others.
 
 ## 3. Workers and prefetch
 
@@ -99,9 +102,13 @@ stalls. Neither fixes the other.
   too shallow for network storage. Batch bytes × depth must fit in host memory.
 - **`persistent_workers=True`** when iterating more than once (epochs, periodic
   eval); otherwise every new iterator pays worker startup and first file opens.
-- **Threads:** workers + main-process threads ≤ cores per rank; set
-  `OMP_NUM_THREADS = cores_per_rank − num_workers`. Don't pin CPUs or NUMA nodes
-  unless each rank owns whole NUMA nodes and an A/B shows a win.
+- **Threads:** workers + main-process threads ≤ cores per rank. Set
+  `OMP_NUM_THREADS = cores_per_rank − num_workers` for the main process.
+  - Workers inherit it. PyTorch caps their torch threads at 1, but numpy/BLAS in
+    a worker use the full value. Cap them in `worker_init_fn`, e.g.
+    `threadpoolctl.threadpool_limits(1)`.
+  - Don't pin CPUs or NUMA nodes unless each rank owns whole NUMA nodes and an
+    A/B shows a win.
 - **`in_order=False` (torch ≥ 2.6)** lets ready batches pass one late worker. It
   doesn't help a slow pool, a sync, or a stall hitting every worker, and it
   breaks resume-by-skipping and position-matched eval outputs.
@@ -155,10 +162,36 @@ reads them:
   rows and a random epoch touches most pages, so the neighbours are read later
   in the same epoch. Readahead fetched them in a few large requests instead of
   one round trip each, and later epochs come from cache anyway.
-- **The data exceeds the page cache: turn it off.** The neighbours are evicted
-  before any batch reads them, so every fault wastes bandwidth and pushes out
-  pages still needed. `mm.madvise(mmap.MADV_RANDOM)` on the mapping, before
-  workers fork, makes each fault fetch only its own page.
+- **The data exceeds the page cache and rows are much smaller than the readahead
+  window: turn it off.** The neighbours are evicted before any batch reads them,
+  so every fault wastes bandwidth and pushes out pages still needed.
+  - With readahead off, each fault fetches only its own page. That is slower for
+    rows that span many pages.
+  - LMDB: `lmdb.open(path, readahead=False)`.
+  - An mmap you own: `mm.madvise(mmap.MADV_RANDOM)` in each worker
+    (`worker_init_fn`). Advice set in the parent reaches workers only if they
+    fork, and Python ≥ 3.14 defaults to forkserver on Linux.
+  - Arrow / HF `datasets` have no switch: use chunk order or staging (§5).
+
+**HDF5 (h5py) reads through `pread()`, not mmap,** so the readahead switches
+above don't apply. Reading one element involves its whole chunk: a random row
+reads and, if compressed, decompresses the entire chunk.
+- **Match the chunk shape to the read:** small chunks along the row axis for
+  random rows, large ones for chunk-order reads (§5). h5py suggests 10 KiB to
+  1 MiB.
+- **The chunk cache must hold the chunks a worker revisits.** Set it with
+  `h5py.File(path, "r", rdcc_nbytes=...)`. It is per dataset and per process
+  (default 1 MiB before HDF5 2.0, 8 MiB from 2.0), so it costs workers ×
+  datasets × `rdcc_nbytes` of host memory.
+- **On BeeGFS, `read()` skips the page cache,** so random HDF5 reads get no
+  reuse beyond that chunk cache. Stage the file.
+- **h5py objects can't be pickled.** Open the file lazily in each worker.
+
+**`.npy` can be memory-mapped; `.npz` can't.** `np.load("x.npz",
+mmap_mode="r")` ignores the mode and reads each array whole when it is
+accessed. Save arrays as `.npy` if you want mmap. Don't keep an `np.memmap` on
+the dataset object under spawn or forkserver: pickling it copies the whole
+array into every worker. Store the path and open the memmap in the worker.
 
 | mistake on network storage | fix |
 |---|---|
@@ -167,7 +200,7 @@ reads them:
 | `glob` / `listdir` / `getsize` on every rank | a manifest built once, offline |
 | every rank scanning or copying the same files | once per node, then broadcast |
 | whole-file loads on every rank | `torch.load(..., mmap=True)`, `np.load(..., mmap_mode="r")` |
-| writing with a sync per commit, or many writers | LMDB `sync=False, metasync=False` + one `env.sync()`; a few writers |
+| writing with a sync per commit, or many writers | LMDB `sync=False, metasync=False` + one `env.sync(True)` before close (plain `env.sync()` is skipped under `sync=False`); a few writers |
 | venv, temp or cache directories on network storage | a container image; `TMPDIR` and caches on `$SLURM_TMPDIR` |
 
 ## 5. Staging and read order
@@ -181,7 +214,7 @@ reads them:
 - Copy a few large files with a few streams; extract locally. Stage only the
   columns and splits you read, val included.
 - Copy to a temporary name, rename, write a marker; fall back to the network
-  path when the marker is missing. Apptainer `--cleanenv` drops `SLURM_TMPDIR`.
+  path when the marker is missing.
 
 **Chunk-shuffled read order** (assumes the data isn't sorted on disk):
 1. Cut the on-disk order into contiguous chunks of MBs, aligned to shards.
@@ -192,11 +225,15 @@ reads them:
 
 Reads stay sequential, so leave readahead on. To check "unsorted enough",
 compare the spread of per-chunk means (length, label, source) with that of
-same-size chunks from a random permutation: ≫ 1 means raise k or rewrite the
-data once shuffled. Bucket lengths inside the window. Libraries do shard
-shuffle plus a buffer: HF `ds.shuffle(seed=42, buffer_size=10_000)` with
-`ds.set_epoch(epoch)` every epoch; with any of them, split by node *and* worker
-or rows repeat.
+same-size chunks from a random permutation. If the ratio of the two spreads is
+≫ 1, raise k or rewrite the data once shuffled. Bucket lengths inside the
+window.
+
+Streaming libraries do a shard shuffle plus a buffer. With HF
+`IterableDataset`, use `ds.shuffle(seed=42, buffer_size=10_000)` and call
+`ds.set_epoch(epoch)` every epoch. With any library, split by node *and* worker,
+or rows repeat. A map-style HF `Dataset.shuffle()` is a full permutation, so its
+reads are random (§4).
 
 **Many epochs, data bigger than local disk.** If it fits the sum of the local
 disks, node n stages part n once and reshuffles within it (re-stage when the
@@ -250,8 +287,10 @@ with no code change.
 - **More nodes multiply the load on shared storage.** The aggregate rate is the
   per-node rate × nodes. Every rank and worker adds `open`/`stat` traffic to the
   same metadata server. Shared storage doesn't grow with your job, but local disk
-  and page cache do, so staging and per-node partitions (§5) scale and network
-  reads don't.
+  and page cache do.
+  - Per-node partitions (§5) scale.
+  - Staging the full set on every node puts nodes × bytes on shared storage at
+    job start. Partition it, or stagger the copies.
 - **A step waits for the slowest rank.** If each rank independently stalls on a
   fraction p of steps, about 1 − (1 − p)^ranks of steps stall. A stall that is
   rare on one node becomes routine at scale, so buffer depth matters more.
@@ -259,8 +298,9 @@ with no code change.
   dataset over the epochs.** A node's page cache then only helps if the whole
   dataset fits in it. A fixed partition per node shrinks each node's working set
   to 1/nodes, so adding nodes makes the data more likely to fit.
-- **Check before scaling.** Run the §1 GPU-free check with the target step time,
-  and compare the aggregate rate with what the shared storage delivers.
+- **Check before scaling.** Run the §1 GPU-free check with the target step time
+  on as many nodes as the run will use, all at once. One node can't show
+  contention on shared storage.
 
 ## 9. Measurement rules
 
