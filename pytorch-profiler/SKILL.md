@@ -70,11 +70,9 @@ class StepProfiler:
         worker_name: str | None = None,  # trace file prefix; None: {hostname}_{pid}, as the handler names it
         out_dir: str | Path = "traces",  # trace directory, fresh per run
     ) -> None:
-        self.trace_path: Path | None = None  # set when the window is written, well before the run ends
+        self.trace_path: Path | None = None  # set when the window is written; stays None on an unprofiled rank
         self.out_dir = Path(out_dir)
         self.worker_name = worker_name or f"{socket.gethostname()}_{os.getpid()}"
-        self.step_num = 0
-        self.total_steps = sched_skip_first + sched_warmup + sched_active
         self._prof_ctx: profile | contextlib.nullcontext[None] = contextlib.nullcontext()
         if sched_active <= 0:  # off on this rank: the nullcontext stays and costs nothing
             return
@@ -96,19 +94,17 @@ class StepProfiler:
         return self
 
     def __exit__(self, *args: object) -> None:
-        if isinstance(self._prof_ctx, profile) and self.step_num < self.total_steps:
-            warnings.warn(f"profiler stopped after {self.step_num} of {self.total_steps} steps: no trace written")
-        self._prof_ctx.__exit__(*args)
+        self._prof_ctx.__exit__(*args)  # an exit inside the window writes what it caught, so judge the run after it
+        if isinstance(self._prof_ctx, profile) and self.trace_path is None:
+            warnings.warn("profiler wrote no trace: the run ended before the window opened")
 
     def _write(self, prof: profile) -> None:  # tensorboard_trace_handler's naming, but it returns no path
         self.trace_path = self.out_dir / f"{self.worker_name}.{time.time_ns()}.pt.trace.json.gz"
         prof.export_chrome_trace(str(self.trace_path))
 
-    def step(self) -> Path | None:
-        self.step_num += 1
+    def step(self) -> None:  # once per optimizer step, never per micro-batch
         if isinstance(self._prof_ctx, profile):
-            self._prof_ctx.step()  # the window's last step writes the trace here, so trace_path is set below
-        return self.trace_path  # None until the window closes, and on a rank that recorded nothing
+            self._prof_ctx.step()  # the window's last step writes the trace, so trace_path is set once it closes
 
 
 @record_function("clip_grad")  # decorator form: labels every call
@@ -135,7 +131,7 @@ with prof:
         with record_function("optimizer"):
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-        prof.step()
+        prof.step()  # under gradient accumulation, keep this where the optimizer steps
         if prof.trace_path and world_size == 1:
             break  # with peers, one rank leaving here would deadlock them in the next collective
 if prof.trace_path:
@@ -155,9 +151,13 @@ if prof.trace_path:
   well before the run ends. Writing it stalls the traced rank while the others wait in the next collective, so treat
   the steps after a window as skewed on every rank. Use a fresh directory per run, or a stale file reads as another
   rank. Trace every rank only to compare ranks: a slow step (§9), or the collective time §8 reads as a minimum.
-- **Step once per optimizer step.** Stepped per micro-batch, a window can land on accumulation steps only and show no
-  all-reduce at all.
-- **A run shorter than `skip_first + warmup + active` steps writes no trace.** The class warns at exit.
+- **Step once per optimizer step,** so `skip_first`, `warmup` and `active` count optimizer steps and each window
+  holds whole accumulation cycles. Under gradient accumulation that means stepping inside the branch that calls
+  `optimizer.step()`, not once per micro-batch: a window stepped per micro-batch can land on accumulation
+  micro-batches only and show no all-reduce at all.
+- **No trace at exit means the run ended before the window opened,** and the class warns then: run more steps, or
+  lower `skip_first`. A run that ends *inside* the window still writes the steps it caught, so count the
+  `ProfilerStep#` spans (§3) before reading a short trace as the steady state.
 - **Exit once captured.** The step that closes the window also builds and writes the trace, which can take far
   longer than a step.
 - **Cost:** a few-step window costs ~0.5% throughput. Gzip shrinks a trace more than 10×.
@@ -250,7 +250,7 @@ before working on it:
 | a gap no host event covers, or one cheap op spanning tens of ms | an untraced host stall | §6 |
 | exposed comm a large share of the window | communication-bound | §8 |
 | one rank with the most data wait and the least collective time (all ranks traced) | a late rank | §9 |
-| collectives on every micro-batch, or none at all under DDP | broken `no_sync`, or a window without an optimizer step | §8 |
+| an all-reduce every micro-batch, or none in a multi-rank DDP window | `no_sync` not in effect, or no DDP wrapper | §8 |
 
 ## 5. Syncs
 
@@ -333,9 +333,10 @@ The host runs ahead of the GPU, filling a queue. A sync blocks the host until th
   Collective kernel duration includes spinning while waiting for late peers, so a late rank inflates it (§9). For
   the time the transfer itself takes, trace every rank and use each step's minimum collective time across ranks,
   then the median over steps; skew moves between ranks and between jobs.
-- **Gradient accumulation:** accumulation micro-batches should show no all-reduce. If every micro-batch all-reduces,
-  `no_sync()` isn't taking effect: check that the object you call it on is the DDP wrapper. A model-unwrapping helper
-  can return the inner module, e.g. Accelerate's `unwrap_model()` with `keep_torch_compile=True`.
+- **Gradient accumulation:** stepping per optimizer step (§2) puts whole cycles in the window, so expect one set of
+  all-reduces per step, on the cycle's last micro-batch only. If every micro-batch all-reduces, `no_sync()` isn't
+  taking effect: check that the object you call it on is the DDP wrapper. A model-unwrapping helper can return the
+  inner module, e.g. Accelerate's `unwrap_model()` with `keep_torch_compile=True`.
 - **Multi-node:** confirm the transport before tuning buckets. Run with `NCCL_DEBUG=INFO`; a line like `GPU Direct
   RDMA Disabled` means every byte is staged through host memory. `NCCL_NET_GDR_LEVEL=SYS` can enable it when the GPU
   and NIC sit on different sockets.
@@ -366,9 +367,9 @@ def _write_if_stalled(self, prof: profile) -> None:
         self._write(prof)
 ```
 
-Run it on every rank, `StepProfiler(50, 1, 3, worker_name=f"rank{rank}")` with a 5 s threshold. `step()` returns
-`trace_path` once a stall is caught, so drop the early stop from the loop: a rolling run trains to the end, and
-`trace_path` holds the trace.
+Run it on every rank, `StepProfiler(50, 1, 3, worker_name=f"rank{rank}")` with a 5 s threshold. `trace_path` is set
+once a stall is caught, so drop the early stop from the loop: a rolling run trains to the end, and `trace_path`
+holds the trace.
 - **Steps within `skip_first` and `warmup` aren't judged,** so the compile step isn't flagged.
 - **The kept window is its own file.** Its `ProfilerStep#N` labels give the step.
 - **Usually only the late rank crosses the threshold,** since a peer whose host never blocks on the GPU keeps
