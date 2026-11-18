@@ -64,8 +64,8 @@ syncs and host-ops tables again before calling the hunt finished.
 
 - Three micro-batches on rank 0 can't carry a claim about a 128-step run on 4 ranks.
 - Ranks of one job differed by up to 5× in sync cost, and which rank was high flipped between jobs (2×A100).
-- **So:** profile every rank, and for per-rank costs take the per-step minimum across ranks, then the median over
-  steps.
+- **So:** one rank is a sample; don't generalize per-rank cost from it. When skew is the question, record every
+  rank, take the per-step minimum across ranks, then the median over steps.
 
 ### 9. Pin the node
 
