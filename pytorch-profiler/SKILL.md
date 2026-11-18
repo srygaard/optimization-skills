@@ -15,10 +15,11 @@ description: >-
 
 # PyTorch profiler: where to spend optimization effort
 
-Profile a few steady-state steps on every rank. Decide first whether the GPU is busy (then the kernels are the target)
-or idle (then find what it waits for), and rank the candidates by what they could buy. **A trace diagnoses; an
-unprofiled A/B on the same node decides.** A fix that erases a lot of idle from a trace can still move throughput by
-~1% when the trace caught warmup, or when the idle wasn't what limited the step.
+Profile a few steady-state steps on one rank unless there are stalls or stragglers (§9). Decide first whether the
+GPU is busy or idle: busy means the kernels are the target, idle means finding what it waits for. Then rank the
+candidates by potential time savings. **A trace diagnoses; an unprofiled A/B on the same node validates.** A fix
+that removes idle time may only improve throughput by ~1% when the trace caught warmup, or when the idle
+wasn't what limited the step.
 
 ## 1. Profile the steady state
 
@@ -41,96 +42,73 @@ steps later.
 ## 2. Capture
 
 Run with `MYPROJ_PROFILE=skip_first,warmup,active`, e.g. `MYPROJ_PROFILE=50,1,3`: skip 50 steps, discard 1, record 3
-optimizer steps, write the trace and exit. Unset, the profiler is a `nullcontext` and costs nothing; a malformed value
-raises. Passing `stall_threshold_s` to the constructor switches to rolling capture for rare stalls (§9).
+optimizer steps and write the trace; a single-rank run then leaves the loop. Unset or empty, the profiler is a
+`nullcontext` and costs nothing; a malformed value raises. §9 cycles this schedule instead, to catch a rare stall.
 Prefix the variable with your project's name, since a bare `PROFILE` can collide with other tools.
 
 ```python
 from __future__ import annotations
 
-import collections
 import contextlib
-import math
 import os
+import socket
 import time
 import warnings
+from pathlib import Path
 
 import torch.distributed as dist
 from torch import nn
-from torch.profiler import ProfilerActivity, profile, record_function, schedule, tensorboard_trace_handler
+from torch.profiler import ProfilerActivity, profile, record_function, schedule
 
 
 class StepProfiler:
     def __init__(
         self,
-        sched_skip_first: int,  # steps before the first window, past compile and autotune warmup
-        sched_warmup: int,  # steps traced but discarded before each window
-        sched_active: int,  # steps recorded per window; 0 disables the profiler
-        worker_name: str | None = None,  # trace file prefix, e.g. rank{N}; None: {hostname}_{pid}
-        stall_threshold_s: float = math.inf,  # rolling profile emitted if a step took this long
-        out_dir: str = "traces",  # trace directory, fresh per run
+        sched_skip_first: int,  # steps before the window, past compile and autotune warmup
+        sched_warmup: int,  # steps traced but discarded before the window
+        sched_active: int,  # steps in the window; 0 disables the profiler on this rank
+        worker_name: str | None = None,  # trace file prefix; None: {hostname}_{pid}, as the handler names it
+        out_dir: str | Path = "traces",  # trace directory, fresh per run
     ) -> None:
-        self.stall_threshold_s = stall_threshold_s
-        self.done = False
+        self.trace_path: Path | None = None  # set when the window is written, well before the run ends
+        self.out_dir = Path(out_dir)
+        self.worker_name = worker_name or f"{socket.gethostname()}_{os.getpid()}"
+        self.step_num = 0
         self.total_steps = sched_skip_first + sched_warmup + sched_active
-        self.step_times_s = collections.deque(maxlen=sched_active)
-        self._last = 0.0
-        self._prof: profile | contextlib.nullcontext[None] = contextlib.nullcontext()
-        if sched_active == 0:
+        self._prof_ctx: profile | contextlib.nullcontext[None] = contextlib.nullcontext()
+        if sched_active <= 0:  # off on this rank: the nullcontext stays and costs nothing
             return
-        self._write = tensorboard_trace_handler(out_dir, worker_name=worker_name, use_gzip=True)
-        rolling = math.isfinite(stall_threshold_s)
-        sched_repeat = 0 if rolling else 1  # 0: cycle until the run ends
-        self._prof = profile(
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self._prof_ctx = profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=schedule(
                 skip_first=sched_skip_first,
                 wait=0,
                 warmup=sched_warmup,
                 active=sched_active,
-                repeat=sched_repeat,
+                repeat=1,  # one window; §9 cycles instead
             ),
-            on_trace_ready=self._write_if_stalled if rolling else self._write,
-        )
-
-    @classmethod
-    def from_env(cls, env_var: str, worker_name: str | None = None, out_dir: str = "traces") -> StepProfiler:
-        """Reads env_var=skip_first,warmup,active, e.g. MYPROJ_PROFILE=50,1,3."""
-        fields = os.environ.get(env_var, "0,0,0").split(",")  # unset: sched_active=0, a no-op
-        if len(fields) != 3:
-            raise ValueError(f"{env_var}={os.environ[env_var]!r}: expected skip_first,warmup,active, e.g. 50,1,3")
-        sched_skip_first, sched_warmup, sched_active = (int(field) for field in fields)
-        return cls(
-            sched_skip_first=sched_skip_first,
-            sched_warmup=sched_warmup,
-            sched_active=sched_active,
-            worker_name=worker_name,
-            out_dir=out_dir,
+            on_trace_ready=self._write,
         )
 
     def __enter__(self) -> StepProfiler:
-        self._prof.__enter__()
-        self._last = time.perf_counter()
+        self._prof_ctx.__enter__()
         return self
 
     def __exit__(self, *args: object) -> None:
-        if isinstance(self._prof, profile) and self._prof.step_num < self.total_steps:
-            warnings.warn(f"profiler stopped after {self._prof.step_num} of {self.total_steps} steps: no trace written")
-        self._prof.__exit__(*args)
+        if isinstance(self._prof_ctx, profile) and self.step_num < self.total_steps:
+            warnings.warn(f"profiler stopped after {self.step_num} of {self.total_steps} steps: no trace written")
+        self._prof_ctx.__exit__(*args)
 
-    def _write_if_stalled(self, prof: profile) -> None:
-        if max(self.step_times_s) >= self.stall_threshold_s:
-            self._write(prof)
+    def _write(self, prof: profile) -> None:  # tensorboard_trace_handler's naming, but it returns no path
+        self.trace_path = self.out_dir / f"{self.worker_name}.{time.time_ns()}.pt.trace.json.gz"
+        prof.export_chrome_trace(str(self.trace_path))
 
-    def step(self) -> bool:
-        if not isinstance(self._prof, profile):
-            return False
-        now = time.perf_counter()
-        self.step_times_s.append(now - self._last)
-        self._last = now
-        self._prof.step()
-        self.done = math.isinf(self.stall_threshold_s) and self._prof.step_num == self.total_steps
-        return self.done
+    def step(self) -> Path | None:
+        self.step_num += 1
+        if isinstance(self._prof_ctx, profile):
+            self._prof_ctx.step()  # the window's last step writes the trace here, so trace_path is set below
+        return self.trace_path  # None until the window closes, and on a rank that recorded nothing
 
 
 @record_function("clip_grad")  # decorator form: labels every call
@@ -138,8 +116,15 @@ def clip_grad(model: nn.Module) -> None:
     nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
 
-rank = dist.get_rank() if dist.is_initialized() else 0  # after init_process_group
-prof = StepProfiler.from_env("MYPROJ_PROFILE", worker_name=f"rank{rank}")
+if dist.is_initialized():  # true once init_process_group has run
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+else:
+    rank = 0
+    world_size = 1
+skip_first, warmup, active = (int(v) for v in os.environ.get("MYPROJ_PROFILE", "0,0,0").split(","))
+
+prof = StepProfiler(skip_first, warmup, active if rank == 0 else 0, worker_name=f"rank{rank}")  # only profile on rank 0
 with prof:
     for batch in loader:
         with record_function("forward"):
@@ -150,12 +135,11 @@ with prof:
         with record_function("optimizer"):
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-        if prof.step():
-            break  # trace written; every rank stops at the same step
-if prof.done:
-    if dist.is_initialized():
-        dist.destroy_process_group()
-    raise SystemExit(0)  # skip eval, checkpointing and the rest of training
+        prof.step()
+        if prof.trace_path and world_size == 1:
+            break  # with peers, one rank leaving here would deadlock them in the next collective
+if prof.trace_path:
+    print(f"profiler trace: {prof.trace_path}")
 ```
 
 - **Labels go in the training loop, outside compiled code.**
@@ -166,8 +150,11 @@ if prof.done:
     keep it.
   - The profiler adds some labels on its own: DataLoader `__next__`, `Optimizer.step#...`, collectives, and
     `Torch-Compiled Region: i/j` around each compiled graph.
-- **Profile every rank.** Each rank writes `rank{N}.<ns>.pt.trace.json.gz`. Use a fresh directory per run, because
-  an old file there gets read as another rank.
+- **Trace one rank.** Ranks run the same code on the same shapes, so idle, syncs and hotspots read the same on any of
+  them. No rank can break out of a multi-rank run, so cap it at the launcher; the trace lands when the window closes,
+  well before the run ends. Writing it stalls the traced rank while the others wait in the next collective, so treat
+  the steps after a window as skewed on every rank. Use a fresh directory per run, or a stale file reads as another
+  rank. Trace every rank only to compare ranks: a slow step (§9), or the collective time §8 reads as a minimum.
 - **Step once per optimizer step.** Stepped per micro-batch, a window can land on accumulation steps only and show no
   all-reduce at all.
 - **A run shorter than `skip_first + warmup + active` steps writes no trace.** The class warns at exit.
@@ -262,7 +249,7 @@ before working on it:
 | long host ops launching nothing while the GPU idles | host work | §6 |
 | a gap no host event covers, or one cheap op spanning tens of ms | an untraced host stall | §6 |
 | exposed comm a large share of the window | communication-bound | §8 |
-| one rank with the most data wait and the least collective time | a straggler | §8 |
+| one rank with the most data wait and the least collective time (all ranks traced) | a late rank | §9 |
 | collectives on every micro-batch, or none at all under DDP | broken `no_sync`, or a window without an optimizer step | §8 |
 
 ## 5. Syncs
@@ -343,12 +330,9 @@ The host runs ahead of the GPU, filling a queue. A sync blocks the host until th
 ## 8. Distributed
 
 - **Exposed communication** is collective time with no compute running on any other stream. That's what it costs.
-  Collective kernel duration includes spinning while waiting for late peers.
-- **Stragglers:** the late rank spends the *least* time in collectives, because the others spin waiting for it. Its
-  data wait or sync shows up on the other ranks as all-reduce time. Compare every rank's trace before blaming
-  communication.
-  - Skew moves between ranks and between jobs. For the time the transfer itself takes, use each step's minimum
-    collective time across ranks, then the median over steps.
+  Collective kernel duration includes spinning while waiting for late peers, so a late rank inflates it (§9). For
+  the time the transfer itself takes, trace every rank and use each step's minimum collective time across ranks,
+  then the median over steps; skew moves between ranks and between jobs.
 - **Gradient accumulation:** accumulation micro-batches should show no all-reduce. If every micro-batch all-reduces,
   `no_sync()` isn't taking effect: check that the object you call it on is the DDP wrapper. A model-unwrapping helper
   can return the inner module, e.g. Accelerate's `unwrap_model()` with `keep_torch_compile=True`.
@@ -358,6 +342,39 @@ The host runs ahead of the GPU, filling a queue. A sync blocks the host until th
 
 ## 9. Finding a slowdown
 
+**A slow step** costs every rank, because the step waits for the slowest. A straggler and a rare stall are the same
+failure, and it reads backwards: the late rank spends the *least* time in collectives, because the others spin
+waiting for it, so its data wait or sync reads as all-reduce time on their traces, not as a wait. Three questions:
+- **How often is it late?** Every step: the fixed window of §2, recorded on every rank, since a lone traced rank
+  pays the profiler and would itself read as late. Rarely: no fixed window will land on it, so cycle windows for
+  the whole run and keep the first one that caught a stall (below).
+- **One rank, or all at once?** One rank is skew, and its own trace holds the cause; the peers show only all-reduce
+  time. Every rank at once is a shared cause — storage, GC (§6), the scheduler — and every GPU idles together, so
+  there is no late rank to find. A single-GPU run is always this case.
+- **What was the late rank doing?** A DataLoader wait (the `pytorch-dataloader` skill), a sync (§5), or a gap no
+  host event covers (§6).
+
+**The rolling capture** varies §2's class. Add a `stall_threshold_s` argument in seconds; time each step in
+`step()` into a `collections.deque(maxlen=sched_active)`; pass `repeat=0` to the schedule, which cycles windows
+until the run ends instead of stopping after one; and hand `on_trace_ready` this in place of `_write`:
+
+```python
+def _write_if_stalled(self, prof: profile) -> None:
+    if self.trace_path:  # the write stalls its own step, which would otherwise trigger the next capture
+        return
+    if max(self.step_times_s) >= self.stall_threshold_s:
+        self._write(prof)
+```
+
+Run it on every rank, `StepProfiler(50, 1, 3, worker_name=f"rank{rank}")` with a 5 s threshold. `step()` returns
+`trace_path` once a stall is caught, so drop the early stop from the loop: a rolling run trains to the end, and
+`trace_path` holds the trace.
+- **Steps within `skip_first` and `warmup` aren't judged,** so the compile step isn't flagged.
+- **The kept window is its own file.** Its `ProfilerStep#N` labels give the step.
+- **Usually only the late rank crosses the threshold,** since a peer whose host never blocks on the GPU keeps
+  launching while its GPU waits in the all-reduce, so its host step time stays normal. To keep every rank's view of
+  the same window, all-reduce the max of `step_times_s` in `_write_if_stalled`, which costs one sync per window.
+
 **A regression between two versions:**
 - Profile both at the same steady step, with the same input shapes, on the same node, back to back.
 - Compare per token (or per sample): compute-only busy, exposed comm, idle by cause, sync rows, and the top kernels.
@@ -366,28 +383,13 @@ The host runs ahead of the GPU, filling a queue. A sync blocks the host until th
 - Check that neither window holds a recompile.
 - Compare **median** step time and kernel time, not means: one DataLoader stall can double a short run's mean.
 
-**A rare stall** won't land in a fixed window. Construct the profiler with a stall threshold in seconds:
-`StepProfiler(50, 1, 3, worker_name=f"rank{rank}", stall_threshold_s=5.0)` records rolling windows of 3 steps on
-every rank for the whole run, and writes only the windows holding a step of 5 s or more (§2). `step()` never returns
-True in this mode, so the run trains to the end.
-- **Steps inside `skip_first` aren't judged,** so the compile step isn't flagged.
-- **The `warmup` steps before each window are neither recorded nor judged,** so a stall can land there. Keep `warmup`
-  at 1.
-- **Leaving the `with` block stops it,** so teardown isn't reported as a stall.
-- **Measure throughput with it on,** because the profiler then runs for the whole job.
-- **Each kept window is its own file.** Its `ProfilerStep#N` labels give the step.
-- **Usually only the stalled rank writes a trace.** A peer whose host never blocks on the GPU keeps launching while
-  its GPU waits in the all-reduce, so its host step time stays normal. The stalled rank's trace holds the cause. To
-  keep every rank's view of the same window, all-reduce the max of `step_times_s` in `_write_if_stalled`, which costs
-  one sync per window.
-
 ## 10. Measurement rules
 
 - Confirm every fix with an unprofiled A/B, on the same node, back to back.
 - Profile the steady state, and check the traced step spans against the unprofiled step time.
 - A host span is not a cost, and a sync's wait is not its cost.
 - Re-profile after each fix.
-- Profile every rank.
+- Trace one rank; every rank to compare ranks.
 - Compare medians and kernel time when the DataLoader stalls.
 - Normalize per token when batch fill changes.
 - Compare windows taken at the same point of the run, since early kernels can run faster.

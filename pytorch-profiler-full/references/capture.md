@@ -41,9 +41,9 @@ Every host stall chased in the cold window was gone at steady state; fixing them
 ## 2. The snippet
 
 The `StepProfiler` class and training loop are in [SKILL.md §2](../SKILL.md). Run with
-`MYPROJ_PROFILE=skip_first,warmup,active` (prefixed with your project's name), e.g. `MYPROJ_PROFILE=50,1,3`. Unset,
-the profiler is a `nullcontext`; an empty or malformed value raises. `wait=0` and `repeat=1` are fixed: one window,
-then exit.
+`MYPROJ_PROFILE=skip_first,warmup,active` (prefixed with your project's name), e.g. `MYPROJ_PROFILE=50,1,3`. Unset
+or empty, the profiler is a `nullcontext`; a malformed value raises. `wait=0` and `repeat=1` are fixed: one window,
+written when it closes.
 
 ### Schedule semantics (`torch.profiler.schedule`)
 
@@ -67,23 +67,25 @@ on_trace_ready=trace_handler,
 
 ### Output
 
-- `tensorboard_trace_handler(dir, worker_name, use_gzip=True)` writes `{worker_name}.{time_ns}.pt.trace.json.gz`.
-  The worker name defaults to `{hostname}_{pid}`; `rank{N}` makes the files easy to match to ranks. Use a fresh
-  directory per run: an old rank file left in it gets read as one more rank.
+- The class composes `{worker_name}.{time_ns}.pt.trace.json.gz`, the name `tensorboard_trace_handler` would use,
+  and exports to it itself, so `prof.trace_path` can hold the path; the handler returns none. `worker_name` falls
+  back to the handler's `{hostname}_{pid}`, which is unique per process; pass `rank{N}` to match files to ranks by
+  eye. Use a fresh directory per run: an old rank file left in it gets read as one more rank.
 - `prof.export_chrome_trace(path)` gzips when `path` ends in `.gz`. If the schedule ran several cycles, only the
   last cycle is exported.
 - **`on_trace_ready` runs inside the `prof.step()` that closes the window,** so that step also pays for building and
   writing the trace. Measured: the step that closed the window took 1160 ms against ~50 ms neighbours (MI300A, 60M
   transformer). If the job keeps training, leave that step out of timing; better, exit (below).
 
-### Exit once captured
+### Stopping once captured
 
-When the trace is the goal, stop:
-- every rank breaks at the same step count, so no rank is left waiting in a collective;
-- `destroy_process_group()` then `SystemExit(0)` skips eval, checkpointing and the rest of the allocation.
+The trace lands when the window closes, well before the run ends, so nothing has to wait for the job to finish. A
+single-rank run can break out of the loop and skip eval, checkpointing and the rest of the allocation. With peers it
+can't: one rank leaving would deadlock the others in the next collective, so cap a profiling run at the launcher.
 
-Profiling **every rank** costs each rank the same export time and keeps them in step. With only rank 0 profiling,
-the other ranks wait for rank 0's export in their next collective.
+The traced rank stalls for its export (1160 ms above) while the others wait in that collective, so the steps just
+after a window read as skewed on every rank. Tracing **every rank** costs each the same export time instead, so they
+stay in step.
 
 ### Labels
 
@@ -184,11 +186,11 @@ from torch.profiler import ProfilerActivity, profile, schedule
 class StallProfiler:
     """Rolling windows of `active` steps; exports only windows holding a step of `slow_s` or more."""
 
-    def __init__(self, skip_first, active, slow_s=5.0, out_dir="stalls"):
+    def __init__(self, skip_first, active, worker_name, slow_s=5.0, out_dir="stalls"):
         os.makedirs(out_dir, exist_ok=True)
         self.slow_s = slow_s
         self.out_dir = out_dir
-        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.worker_name = worker_name
         self.step_times = collections.deque(maxlen=active)
         self.last = None
         self._prof = profile(
@@ -199,7 +201,7 @@ class StallProfiler:
 
     def _keep_if_slow(self, p):
         if max(self.step_times, default=0.0) >= self.slow_s:
-            p.export_chrome_trace(f"{self.out_dir}/rank{self.rank}_step{p.step_num}.pt.trace.json.gz")
+            p.export_chrome_trace(f"{self.out_dir}/{self.worker_name}_step{p.step_num}.pt.trace.json.gz")
 
     def __enter__(self):
         self._prof.__enter__()
@@ -217,14 +219,18 @@ class StallProfiler:
         self._prof.step()
 
 
-with StallProfiler(skip_first=50, active=3) as prof:
+rank = dist.get_rank() if dist.is_initialized() else 0
+with StallProfiler(skip_first=50, active=3, worker_name=f"rank{rank}") as prof:
     for batch in loader:
         ...  # forward, backward, optimizer
         prof.step()
 ```
 
 - Run it on **every rank**. The stalled rank and the ranks waiting for it all cross the threshold, so you get every
-  view of the same stall.
+  view of the same stall. A rank late on *every* step is the same failure at a higher rate: the fixed window catches
+  that one ([distributed.md](distributed.md) §2).
+- **Check who was late.** One rank is skew, and its trace holds the cause. Every rank at once, with every GPU idle
+  and nobody spinning in a collective, is a shared cause: storage, GC, the scheduler.
 - **Don't judge steps inside `skip_first`:** the compile step would be flagged.
 - **With `warmup=1`, one step in every `active + 1` is unrecorded,** so a stall can land there. `warmup=0` records
   every step at the cost of the start-up skew described above.

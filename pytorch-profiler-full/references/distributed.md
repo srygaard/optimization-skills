@@ -1,7 +1,8 @@
 # Distributed: communication, stragglers, accumulation
 
-Profile **every rank**: each writes its own trace (`worker_name=f"rank{rank}"`). One rank's trace can't tell its own
-slowness apart from waiting on another rank. `trace_report.py traces/` prints a row per rank.
+**Record every rank for these questions** (a positive `active` on every rank), against the one-rank
+default: one rank's trace can't tell its own slowness apart from waiting on another rank. `trace_report.py traces/`
+prints a row per rank.
 
 ## 1. Exposed vs overlapped communication
 
@@ -23,10 +24,12 @@ Measured:
   all-reduce per micro-batch, against ~27 ms on one 4-GPU node.
 - **2×L40S, `DDP(torch.compile(model))`:** 100% of the all-reduce was exposed. *(Wrap-order result pending.)*
 
-## 2. Stragglers
+## 2. Stragglers, and the stalls that are stragglers
 
 A step waits for the slowest rank. A late rank spends less time in collectives than the others, because they spin
-waiting for it while it arrives last.
+waiting for it while it arrives last. A rare stall ([capture.md](capture.md) §4) is the same failure at a lower
+rate, and reads the same way — unless it hits every rank at once, which leaves every GPU idle with nobody spinning
+and points at a shared cause instead of skew.
 
 - **The report's rank table** flags the rank with the most DataLoader wait and the rank with the least
   collective-kernel time. When both flags point at one rank, that rank is the straggler.
@@ -34,7 +37,7 @@ waiting for it while it arrives last.
     stall only as a 526 ms wait in its next sync, with the GPU "busy" on a spinning NCCL kernel.
   - **4×H100 stall capture:** one rank was flagged in a 4-rank window that held a 4.2 s DataLoader stall.
 - **A late batch on one rank shows up on the others as all-reduce time,** not as data wait. Check every rank before
-  blaming communication.
+  blaming communication: the fixed window for skew on every step, capture.md §4's threshold for a rare stall.
 - **Skew moves between ranks and between jobs.** Two ranks of one job differed by up to 5× in sync cost, and which
   rank was high flipped between jobs (2×A100). Rank-0 means produced two false features in a bucket-size sweep.
   - Take the per-step **minimum across ranks**, which removes waiting on peers, then the **median over steps**, which

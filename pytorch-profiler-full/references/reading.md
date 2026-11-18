@@ -7,6 +7,7 @@ Use `key_averages()` for per-op tables, and Perfetto to look at one step by eye.
 
 ```bash
 python3 scripts/trace_report.py traces/                 # every trace file: full report for the first, a row per rank
+                                                       # (the rank table needs several files)
 python3 scripts/trace_report.py traces/ --rank 1        # full report for rank 1
 python3 scripts/trace_report.py rank0.pt.trace.json.gz --top 20 --slow-op-us 500
 ```
