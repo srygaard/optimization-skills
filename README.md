@@ -1,0 +1,9 @@
+# optimization-skills
+
+Each top-level directory is one self-contained skill in the format agents load from `~/.claude/skills/`.
+
+| skill | reach for it when |
+|---|---|
+| [pytorch-compile](pytorch-compile/SKILL.md) | compile is slow, recompiles repeat, compiled is slower than eager, a mode or CUDA-graph error to settle |
+| [pytorch-dataloader](pytorch-dataloader/SKILL.md) | the GPU waits on `next()`: utilization low or bursty, worker and storage tuning, a late DDP rank |
+| [pytorch-profiler](pytorch-profiler/SKILL.md) / [-full](pytorch-profiler-full/SKILL.md) | you need the step's composition: idle gaps, host syncs, hotspots, exposed all-reduce |
