@@ -12,6 +12,8 @@ description: >-
   from Ousterhout's "A Philosophy of Software Design". Produces .vibecheck/report.md, which another
   agent can work from, .vibecheck/issues.json, with every finding and its severity, and the metrics of
   each measured commit, so progress is tracked across the work.
+metadata:
+  version: 1.0.0
 ---
 
 # Vibecheck a repo before open-sourcing
