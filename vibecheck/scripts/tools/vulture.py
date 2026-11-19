@@ -5,10 +5,20 @@ import json
 import re
 import warnings
 from pathlib import Path
+from typing import ClassVar, NamedTuple
 
+from scope import Scope
 from utils.git import git
 from utils.pyproject import read_pyproject
-from tools.base import Metric, Result, Step
+from tools.base import Issue, Metric, Result, Step
+
+
+class Ref(NamedTuple):
+    """A tracked file that can name code without importing it."""
+
+    rel: str
+    text: str
+    strings_only: bool  # only its string literals name a symbol, not its whole text
 
 
 class Vulture(Step):
@@ -17,7 +27,7 @@ class Vulture(Step):
     name = "vulture"
     package = "vulture"
     version = "2.16"
-    policy = {
+    policy: ClassVar[dict] = {
         "dead-large": "unused function, class or module of {dead_high_lines}+ lines",
         "dead-small": "unused function, class or module of {min_dead_lines}+ lines, under {dead_high_lines}",
         # set by `adjust` on other tools' issues
@@ -26,7 +36,7 @@ class Vulture(Step):
     metrics = (Metric("dead_code_loc", "Dead code LOC",
                       description="lines in functions, classes and modules nothing uses or names"),)
 
-    def dead_issue(self, c: dict, with_coverage: bool) -> dict:
+    def dead_issue(self, c: dict, with_coverage: bool) -> Issue:
         """Open, or dismissed when something names the symbol or its body ran."""
         item = c["item"]
         size = c["lines"]
@@ -44,7 +54,7 @@ class Vulture(Step):
                  "then delete it."),
             done_when="Deleted, and the import test and safety net pass.")
 
-    def measure(self, scope) -> Result:
+    def measure(self, scope: Scope) -> Result:
         import vulture  # the analyzer, not this module: tools/ is not on sys.path
 
         if not scope.files:
@@ -57,17 +67,28 @@ class Vulture(Step):
         refs = _references(scope.repo, scope.files)
         coverage = executed_lines(scope.repo)
         modules = unimported_modules(scope, refs)
-        found = []
-        for item in v.get_unused_code(min_confidence=self.settings["min_confidence"], sort_by_size=True):
-            if file := reported_file(item, names, modules):
-                found.append(dead_candidate(item, file, scope, refs, coverage))
+        found = [
+            dead_candidate(item, file, scope, refs, coverage)
+            for item
+            in v.get_unused_code(min_confidence=self.settings["min_confidence"], sort_by_size=True)
+            if (file := reported_file(item, names, modules))
+        ]
         total = sum(c["lines"] for c in found if c["unused"]) + sum(modules.values())
-        issues = [self.dead_issue(c, bool(coverage)) for c in found if c["lines"] >= self.settings["min_dead_lines"]]
-        issues += [self.module_issue(file, size) for file, size in modules.items()
-                   if size >= self.settings["min_dead_lines"]]
+        issues = [
+            self.dead_issue(c, bool(coverage))
+            for c
+            in found
+            if c["lines"] >= self.settings["min_dead_lines"]
+        ]
+        issues += [
+            self.module_issue(file, size)
+            for file, size
+            in modules.items()
+            if size >= self.settings["min_dead_lines"]
+        ]
         return Result(issues, {"dead_code_loc": total})
 
-    def module_issue(self, file: str, size: int) -> dict:
+    def module_issue(self, file: str, size: int) -> Issue:
         """A module that nothing imports or runs."""
         return self.issue(
             "DEAD", "dead-code", "unused-module", "dead-large" if size >= self.settings["dead_high_lines"] else "dead-small",
@@ -83,14 +104,19 @@ class Vulture(Step):
         for i in found:
             if i["category"] not in ("complexity", "red-flag") or not i.get("line"):
                 continue
-            host = next((d for d in dead if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]), None)
+            host = next((
+                d
+                for d
+                in dead
+                if d["file"] == i["file"] and d["line"] <= i["line"] <= d["end_line"]
+            ), None)
             if host:
                 i["severity"] = self.severity["inside-dead-code"]
                 i["evidence"]["inside_dead_code"] = host["id"]
                 i["fix"] = f"Inside dead-code candidate {host['id']}: delete that instead, unless it turns out to be used. " + i["fix"]
 
 
-def _references(repo: Path, shipped: list) -> list:
+def _references(repo: Path, shipped: list) -> list[Ref]:
     """(path, text, strings_only) of tracked files that can name code without importing it.
 
     Configs, scripts, notebooks and docs count wholesale, as do Python files outside the scope (tests). In the
@@ -100,20 +126,20 @@ def _references(repo: Path, shipped: list) -> list:
     text_suffixes = {".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".sh", ".bash", ".slurm", ".sbatch",
                      ".ipynb", ".jinja", ".j2", ".md", ".rst"}
     out = []
-    shipped = set(shipped)
+    in_scope = set(shipped)
     for rel in git(repo, "ls-files", "-z").split("\0"):
         path = repo / rel
         suffix = Path(rel).suffix
         if not rel or not path.is_file() or path.stat().st_size > 5_000_000:
             continue
-        if suffix in text_suffixes or (suffix == ".py" and rel not in shipped):
-            out.append((rel, path.read_text(errors="replace"), False))
-        elif rel in shipped:
-            out.append((rel, path.read_text(errors="replace"), True))
+        if suffix in text_suffixes or (suffix == ".py" and rel not in in_scope):
+            out.append(Ref(rel, path.read_text(errors="replace"), strings_only=False))
+        elif rel in in_scope:
+            out.append(Ref(rel, path.read_text(errors="replace"), strings_only=True))
     return out
 
 
-def _named_in(refs: list, name: str, modules: list) -> tuple:
+def _named_in(refs: list[Ref], name: str, modules: list) -> tuple:
     """(files that name it, files that only mention it). Naming takes its module or a package above it:
     `module.name` or `module:name` (a yaml `target:`, an entry point, a "main.SetupCallback" string in the
     code) or `from ...module import name`. A bare `.name` or "name" (`model.train()`, `split="train"`) is only a
@@ -130,11 +156,11 @@ def _named_in(refs: list, name: str, modules: list) -> tuple:
     bare_string = re.compile(rf"[\"']{n}[\"']")
     named = []
     mentioned = []
-    for rel, text, strings_only in refs:
-        if (in_string if strings_only else qualified).search(text):
-            named.append(rel)
-        elif (bare_string if strings_only else bare).search(text):
-            mentioned.append(rel)
+    for ref in refs:
+        if (in_string if ref.strings_only else qualified).search(ref.text):
+            named.append(ref.rel)
+        elif (bare_string if ref.strings_only else bare).search(ref.text):
+            mentioned.append(ref.rel)
     return named, mentioned
 
 
@@ -149,7 +175,7 @@ def reported_file(item, names: dict, modules: dict) -> str | None:
     return None if item.typ in ("method", "property", "variable", "attribute", "import") else file
 
 
-def unimported_modules(scope, refs: list) -> dict:
+def unimported_modules(scope: Scope, refs: list[Ref]) -> dict:
     """{file: lines} of the modules in scope whose name no other tracked file mentions, leaving out scripts (a
     `__main__` guard or work done at the top level) and modules Python or tools load by name."""
     loaded_by_name = {"__init__", "__main__", "setup", "conftest", "sitecustomize", "usercustomize", "noxfile"}
@@ -162,7 +188,7 @@ def unimported_modules(scope, refs: list) -> dict:
         if "__main__" in text or _runs_on_import(text):
             continue
         named = re.compile(rf"\b{re.escape(stem)}\b")
-        if not any(rel != file and named.search(other) for rel, other, _ in refs):
+        if not any(ref.rel != file and named.search(ref.text) for ref in refs):
             out[file] = len(text.splitlines())
     return out
 
@@ -185,7 +211,7 @@ def _runs_on_import(text: str) -> bool:
     return False
 
 
-def runtime_lines(scope, file: str, line: int) -> set:
+def runtime_lines(scope: Scope, file: str, line: int) -> set:
     """Lines that only run when the code is used: a function's body, or the bodies of a class's methods.
     Def, decorator and class-body lines run on import, so coverage of them says nothing."""
     d = scope.at_def_line(file, line)
@@ -204,19 +230,22 @@ def executed_lines(repo: Path) -> dict:
             for name, f in json.loads(cov.read_text()).get("files", {}).items()}
 
 
-def dead_candidate(item, file: str, scope, refs: list, coverage: dict) -> dict:
+def dead_candidate(item, file: str, scope: Scope, refs: list[Ref], coverage: dict) -> dict:
     """A vulture item in `file` with what decides it: the symbol, the files that name or mention it, whether
     it ran. `unused` (nothing names it and it didn't run) is what dead-code LOC counts."""
     line = item.first_lineno
     unreachable = item.typ == "unreachable_code"
-    d = scope.at_def_line(file, line)
+    defn = scope.at_def_line(file, line)
     if unreachable:
         qual = scope.qualname(file, line)
     else:
-        qual = d.qualname if d and d.qualname.endswith(item.name) else item.name
+        qual = defn.qualname if defn and defn.qualname.endswith(item.name) else item.name
     modules = [p for p in Path(file).with_suffix("").parts[::-1] if p != "__init__"]
-    # unreachable code can't be referenced
-    hits, mentions = ([], []) if unreachable else _named_in(refs, qual.rsplit(".", 1)[-1], modules)
+    if unreachable:  # unreachable code can't be referenced
+        hits = []
+        mentions = []
+    else:
+        hits, mentions = _named_in(refs, qual.rsplit(".", 1)[-1], modules)
     ran = bool(coverage.get(file, set()) & runtime_lines(scope, file, line))
     return {"item": item, "rule": "unreachable" if unreachable else item.typ, "file": file, "line": line,
             "lines": item.size, "symbol": qual, "hits": hits, "mentions": mentions, "ran": ran,

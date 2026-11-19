@@ -14,11 +14,13 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 from utils.git import git
 from utils.process import run
-from tools.base import Result, Tool
+from tools.base import Issue, Result, Tool
 
 
 class Betterleaks(Tool):
@@ -26,13 +28,13 @@ class Betterleaks(Tool):
 
     name = "betterleaks"
     version = "1.9.0"  # not on PyPI: the release binary is pinned here, with its checksums
-    sha256 = {  # checksums.txt of the v1.9.0 release, signature verified with sigstore
+    sha256: ClassVar[dict] = {  # checksums.txt of the v1.9.0 release, signature verified with sigstore
         ("darwin", "arm64"): "83dd7eaab13d44a1e8e347a17064cdef153a1478db473276d41b38d55613d3f2",
         ("darwin", "x64"): "68dfd83458d9e7f90663daa7a81c7f944083b170dae82e4f5f8d0581ed519ef1",
         ("linux", "arm64"): "1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b",
         ("linux", "x64"): "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7",
     }
-    policy = {
+    policy: ClassVar[dict] = {
         "credential": "credential matched by a confident rule, at HEAD or only in history",
         "possible-credential": "possible credential (low-confidence rule or sensitive file name)",
         "internal-head": "internal path, host, email or account at HEAD",
@@ -65,9 +67,10 @@ class Betterleaks(Tool):
             raise SystemExit(f"SHA-256 mismatch for {name}: refusing to run it")
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             member = tar.getmember("betterleaks")
-            if not member.isfile():
+            binary = tar.extractfile(member) if member.isfile() else None
+            if binary is None:
                 raise SystemExit(f"{name} does not contain a betterleaks binary")
-            blob = tar.extractfile(member).read()
+            blob = binary.read()
         cache.mkdir(parents=True, exist_ok=True)
         part = cache / "betterleaks.part"
         part.write_bytes(blob)
@@ -75,7 +78,7 @@ class Betterleaks(Tool):
         part.replace(exe)
         return exe
 
-    def group_issue(self, g: dict) -> dict:
+    def group_issue(self, g: dict) -> Issue:
         """The issue for one group of findings."""
         rule, at = located(g)
         ev = at["evidence"]
@@ -91,7 +94,7 @@ class Betterleaks(Tool):
         key = "|".join(map(str, g["first"][1:])) if g["named"] else hashlib.sha256(g["basis"].encode()).hexdigest()
         return self.credential_issue(rule, f"LEAK|{key}", at)
 
-    def internal_issue(self, rule: str, key: str, at: dict) -> dict:
+    def internal_issue(self, rule: str, key: str, at: dict) -> Issue:
         """An internal reference, at HEAD or only in history; `at` is where it is (file, line, evidence)."""
         ev = at["evidence"]
         here = ev["at_head"]
@@ -103,9 +106,9 @@ class Betterleaks(Tool):
             fix=("Replace it with a config value, CLI argument or environment variable "
                  "(or a neutral placeholder in docs)." if here else
                  "Only matters if the history is published; a fresh squashed history drops it."),
-            done_when="`cleanup.py leaks` no longer reports it at HEAD.")
+            done_when="`vibecheck.py leaks` no longer reports it at HEAD.")
 
-    def credential_issue(self, rule: str, key: str, at: dict) -> dict:
+    def credential_issue(self, rule: str, key: str, at: dict) -> Issue:
         """A certain or possible credential, at HEAD or only in history; `at` is where it is."""
         ev = at["evidence"]
         here = ev["at_head"]
@@ -129,25 +132,26 @@ class Betterleaks(Tool):
             key=key, **at, fix=fix,
             done_when="Rotated (user confirms), gone from HEAD, and dismissed with a note on how history is handled.")
 
-    def carry_over(self, found: list, known: list, full: bool) -> list:
+    def carry_over(self, found: list, known: list, full: bool) -> Iterator[Issue]:
         """`found` with the IDs of the issues `known` before: an internal reference matches by ID (its rule and
         file), a credential by a fingerprint in common (a commit it was found in). After a scan of the new commits
         only, each also keeps what earlier scans saw, and a known issue not found is still in the commits read
-        before: it comes back as history-only rather than fixed."""
+        before: it comes back as history-only rather than fixed. `left` is drained as it goes, so the leftovers
+        come last and the caller must consume it in order."""
         left = {k["id"]: k for k in known if k["status"] != "fixed"}
-        out = []
         for i in found:
             k = take(left, i)
             if k and full:
-                i = {**i, "id": k["id"]}
+                yield {**i, "id": k["id"]}  # type: ignore[typeddict-item]  # a copy of an Issue is one
             elif k:
-                i = self.updated(k, i)
-            out.append(i)
+                yield self.updated(k, i)
+            else:
+                yield i
         if not full:
-            out += [self.updated(k, None) for k in left.values()]
-        return out
+            for k in left.values():
+                yield self.updated(k, None)
 
-    def updated(self, known: dict, now: dict | None) -> dict:
+    def updated(self, known: dict, now: dict | None) -> Issue:
         """`known` after a scan of the new commits and HEAD: `now` is what it found of it, or None (it is only in
         the commits read before). It keeps its ID, what each scan found of it adds up, and it becomes certain if a
         finding is."""
@@ -159,7 +163,13 @@ class Betterleaks(Tool):
             seen = now["evidence"]
             ev.update(added_up(known, seen), rules=sorted({*old["rules"], *seen["rules"]}))
             if seen["at_head"]:
-                ev.update({k: seen[k] for k in ("at_head", "head_files", "preview", "matches", "match_count") if k in seen})
+                carried = ("at_head", "head_files", "preview", "matches", "match_count")
+                ev.update({
+                    k: seen[k]
+                    for k
+                    in carried
+                    if k in seen
+                })
                 at.update(file=now["file"], line=now["line"])
             if seen.get("certain") and not old.get("certain"):
                 ev["certain"] = True
@@ -198,7 +208,7 @@ class Betterleaks(Tool):
             f.update(Commit="HEAD", Date="")
         trace(repo, at_head)
         groups = group_findings(committed, at_head)
-        issues = self.carry_over([self.group_issue(g) for g in groups.values()], known, full)
+        issues = list(self.carry_over([self.group_issue(g) for g in groups.values()], known, full))
         return Result(issues, {self.name: version, "rules_sha256": rules_sha256, "tips": tips, "full": full,
                                "commits": commits})
 
@@ -222,7 +232,7 @@ def _download(url: str) -> bytes:
             if p.returncode == 0:
                 return p.stdout
         raise SystemExit(f"could not download {url} ({e}). Offline? Fetch it elsewhere, check its SHA-256 "
-            "and set BETTERLEAKS=/path/to/betterleaks")
+            "and set BETTERLEAKS=/path/to/betterleaks") from None
 
 
 def _internal_rule(n: int, regex: str) -> str:

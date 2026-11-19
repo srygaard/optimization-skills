@@ -3,7 +3,7 @@
 A credential that reaches a public repo is compromised: forks, clones and caches keep it after you
 delete it. That is why the scan is mandatory and runs first.
 
-## What `cleanup.py leaks` scans
+## What `vibecheck.py leaks` scans
 
 - **Every commit, once:** the first scan reads every commit on every ref (`betterleaks git`), so a key
   deleted three years ago is still found. Later scans read only the commits added since (those not
@@ -89,7 +89,7 @@ lives in a temp dir that is deleted at once.
      GitHub's caches keep the old objects. The agent never force-pushes.
 4. **Prevent recurrence:** a secret-scanning pre-commit hook (`betterleaks git --pre-commit --staged`),
    a CI job running the same scan, and GitHub push protection once the repo is public.
-5. **Re-scan** with `cleanup.py leaks`: after a rewrite it reads every commit again by itself.
+5. **Re-scan** with `vibecheck.py leaks`: after a rewrite it reads every commit again by itself.
 
 ## Betterleaks binary
 

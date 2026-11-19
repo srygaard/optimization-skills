@@ -1,4 +1,4 @@
-"""`cleanup.py leaks`: the mandatory leak scan, over each commit once and over the files at HEAD every time."""
+"""`vibecheck.py leaks`: the mandatory leak scan, over each commit once and over the files at HEAD every time."""
 
 from pathlib import Path
 
@@ -10,7 +10,12 @@ from utils.git import git, head
 def print_leaks(repo: Path, data: dict, found: list, scanners: str):
     """Counts by severity, then the first 15 issues as issues.json now has them. `scanners` names the tools
     and their versions."""
-    counts = " · ".join(f"{n} {s.name}" for s in Severity if (n := sum(i["severity"] == s.name for i in found)))
+    counts = " · ".join(
+        f"{n} {s.name}"
+        for s
+        in Severity
+        if (n := sum(i["severity"] == s.name for i in found))
+    )
     print(f"leaks @ {head(repo)[:8]}  {scanners}  {counts or 'nothing found'}")
     ids = {i["id"] for i in found}
     for i in [i for i in data["issues"] if i["id"] in ids][:15]:
@@ -20,7 +25,7 @@ def print_leaks(repo: Path, data: dict, found: list, scanners: str):
 
 
 def cmd_leaks(a):
-    """`cleanup.py leaks`: the leak scan, folded into issues.json. It reads every commit the first time, with
+    """`vibecheck.py leaks`: the leak scan, folded into issues.json. It reads every commit the first time, with
     `--history`, when its rules changed, or when a commit it read has left the history; otherwise only the commits
     added since. It reads the files at HEAD every time."""
     cleanup = Cleanup(a.repo)

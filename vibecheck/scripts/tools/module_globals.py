@@ -1,5 +1,7 @@
 """Module-level globals, from the scope's index: constants and state a module keeps outside its functions."""
 
+from typing import ClassVar
+
 from tools.base import Metric, Result, Step
 
 
@@ -7,7 +9,7 @@ class ModuleGlobals(Step):
     """How many globals the modules keep, as one issue and a count."""
 
     name = "globals"
-    policy = {
+    policy: ClassVar[dict] = {
         "globals": "module-level globals, constants included: each could live next to its only user",
     }
     metrics = (Metric("globals", "Globals", warn="module-level globals",

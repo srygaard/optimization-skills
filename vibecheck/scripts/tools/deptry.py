@@ -7,12 +7,13 @@ import sys
 import tomllib
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 from utils.git import git
 from utils.paths import rel
 from utils.process import run
 from utils.pyproject import read_pyproject
-from tools.base import Metric, Result, Step, ToolError
+from tools.base import Issue, Metric, Result, Step, ToolError
 
 SETTINGS_FILE = Path(__file__).parent / "deptry.toml"
 
@@ -23,7 +24,7 @@ class Deptry(Step):
     name = "deptry"
     package = "deptry"
     version = "0.25.1"
-    policy = {
+    policy: ClassVar[dict] = {
         "deps-none": "no pyproject.toml dependencies or requirements.txt at the repo root",
         "deps-undeclared": "an import that isn't a declared dependency, or only a dev one",
         "deps-unused": "declared dependency that is never imported, the project itself and dev-only tooling aside",
@@ -32,7 +33,7 @@ class Deptry(Step):
                       description="imports in the code in scope (tests aside) not declared as dependencies, and "
                                   "declared ones it never imports"),)
 
-    def no_dependency_list(self, repo: Path) -> dict:
+    def no_dependency_list(self, repo: Path) -> Issue:
         """No pyproject.toml dependencies or requirements.txt at the repo root. A list anywhere else (setup.py,
         requirements-dev.txt, env/, environment.yml, PEP 723 script blocks) doesn't count; one at the root is named."""
         elsewhere = [n for n in ("setup.py", "setup.cfg") if (repo / n).exists()] + \
@@ -45,7 +46,7 @@ class Deptry(Step):
             fix=("Declare the runtime dependencies in pyproject.toml ([project].dependencies), or in a requirements.txt "
                  "at the repo root. Move a list kept elsewhere (env/, environment.yml, a script's PEP 723 block) "
                  "there."),
-            done_when="`cleanup.py measure` runs deptry without 'not measured'.")
+            done_when="`vibecheck.py measure` runs deptry without 'not measured'.")
 
     def measure(self, scope) -> Result:
         """Undeclared, unused and dev-only dependencies of the code in scope, or one issue saying there is no list
@@ -71,8 +72,12 @@ class Deptry(Step):
             "DEP004": "`{}` is a dev dependency but the code imports it: move it to the main dependencies.",
         }
         exempt = unused_exempt(repo)
-        violations = [v for v in violations
-                      if v["error"]["code"] != "DEP002" or v["module"].lower() not in exempt]
+        violations = [
+            v
+            for v
+            in violations
+            if v["error"]["code"] != "DEP002" or v["module"].lower() not in exempt
+        ]
         out = []
         for v in violations:
             code = v["error"]["code"]

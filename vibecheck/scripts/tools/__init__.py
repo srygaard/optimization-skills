@@ -2,7 +2,7 @@
 those depend on. This is the one place both are set; each tool's module says what its findings cover and how it
 finds them. Agents set the severity of the red flags and bugs they add.
 
-The measure steps are `Step`s. The leak scan has a `scan` method instead, which `cleanup.py leaks` calls.
+The measure steps are `Step`s. The leak scan has a `scan` method instead, which `vibecheck.py leaks` calls.
 """
 
 from tools.base import Step
@@ -58,7 +58,7 @@ MEASURE: tuple[Step, ...] = (
 )
 LEAK_SCAN = Betterleaks(severity={"credential": "critical", "possible-credential": "high", "internal-head": "high",
                                   "internal-history": "low"})
-ANALYZERS = tuple(t for t in MEASURE if t.package)  # the tools cleanup.py's script header pins
+ANALYZERS = tuple(t for t in MEASURE if t.package)  # the tools vibecheck.py's script header pins
 ALL = (LEAK_SCAN, *MEASURE)
 
 

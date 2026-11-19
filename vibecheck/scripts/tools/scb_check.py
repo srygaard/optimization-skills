@@ -6,12 +6,14 @@ import math
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
 from importlib.metadata import distribution
 from pathlib import Path
+from typing import ClassVar
 
 from utils.paths import rel
 from scope import Def
-from tools.base import Metric, Result, Step, ToolError
+from tools.base import Issue, Metric, Result, Step, ToolError
 
 
 class ScbCheck(Step):
@@ -21,7 +23,7 @@ class ScbCheck(Step):
     package = "scb-check"
     version = "0.2.0"
     # scb-check 0.2.0 lists the functions with CC > 10, and Erosion is the share of mass in them: that 10 is its own
-    policy = {
+    policy: ClassVar[dict] = {
         "complex": "function with CC > 10 and CC x sqrt(SLOC) >= {medium_mass} (e.g. CC 15 over 45 lines)",
         "repetition": "duplicate group with lines x (copies - 1) >= {medium_dup_lines}",
         "wrapper": "trivial wrapper or shallow function",
@@ -76,40 +78,43 @@ class ScbCheck(Step):
         out = [*self.wrapper_issues(src, flags, scope), *self.repetition_issues(src, flags, scope),
                *self.complexity_issues(src, flags, scope)]
         loc = m["total_loc"] or 1
-        metrics = dict(
-            loc=m["total_loc"], cc_over_10=m["high_cc_functions"], verbosity=round(m["verbosity"], 4),
-            erosion=round(m["erosion"], 4), cog_erosion=round(m["cog_erosion"], 4),
-            violation_pct=round(m["ast_grep_flagged_loc"] / loc, 4), clone_ratio=round(m["clone_loc"] / loc, 4),
-            verbosity_flagged_loc=m["verbosity_flagged_loc"], high_cc_mass=round(m["high_cc_mass"], 1))
+        metrics = {
+            "loc": m["total_loc"],
+            "cc_over_10": m["high_cc_functions"],
+            "verbosity": round(m["verbosity"], 4),
+            "erosion": round(m["erosion"], 4),
+            "cog_erosion": round(m["cog_erosion"], 4),
+            "violation_pct": round(m["ast_grep_flagged_loc"] / loc, 4),
+            "clone_ratio": round(m["clone_loc"] / loc, 4),
+            "verbosity_flagged_loc": m["verbosity_flagged_loc"],
+            "high_cc_mass": round(m["high_cc_mass"], 1),
+        }
         # no ast-grep binary worked: the slop rules silently counted nothing
         return Result(out, metrics, notes={"violation_pct": "ast-grep did not run"} if "ast-grep" in warnings else None)
 
-    def wrapper_issues(self, src: Path, flags, scope) -> list:
+    def wrapper_issues(self, src: Path, flags, scope) -> Iterator[Issue]:
         """Ousterhout's pass-through methods and shallow modules, from scb-check's wrapper rules."""
         red_flags = {"trivial-wrapper": "pass-through-method", "low-use-short-function": "shallow-module"}
-        out = []
         for f in flags.findings.structural_findings:
             if f.rule_id not in red_flags:
                 continue
             file = rel(src, f.file)
             d = scope.at_def_line(file, f.start_line)
-            out.append(self.issue(
+            yield self.issue(
                 "RF", "red-flag", red_flags[f.rule_id], "wrapper", f"{f.rule_id}: {f.message}",
                 file=file, symbol=d.qualname if d else "<module>", line=f.start_line,
                 evidence={"scb_rule": f.rule_id}, effort="S",
                 fix=("Inline it into its callers or remove it. If it is deliberate (a public alias, or an "
                      "override such as `model.train = disabled_train`), dismiss the issue with that reason."),
-                done_when="scb-check no longer reports it (or it is dismissed), and the safety net passes."))
-        return out
+                done_when="scb-check no longer reports it (or it is dismissed), and the safety net passes.")
 
-    def repetition_issues(self, src: Path, flags, scope) -> list:
+    def repetition_issues(self, src: Path, flags, scope) -> Iterator[Issue]:
         """One issue per duplicate group, named after the functions that hold the copies. A copy's length counts
         its code lines, as scb-check prints it."""
         clone_sloc = {e.file: e.lines for e in flags.lines.clone_sloc_lines_by_file}
         groups = {}
         for clone in flags.findings.clones:
             groups.setdefault(clone.group_hash, []).append(clone)
-        out = []
         for group in groups.values():
             group.sort(key=lambda c: (rel(src, c.file), c.start_line))
             anchor = group[0]
@@ -122,7 +127,7 @@ class ScbCheck(Step):
             weight = lines * (count - 1)
             members = sorted({(file, scope.qualname(file, line)) for file, line in locs})
             places = [f"{file}:{line}" for file, line in locs]
-            out.append(self.issue(
+            yield self.issue(
                 "RF", "red-flag", "repetition", "repetition" if weight >= self.settings["medium_dup_lines"] else "repetition-small",
                 f"{lines}-line block duplicated {count}x: {', '.join(places[:4])}",
                 key="RF|repetition|" + "|".join(f"{f}:{q}" for f, q in members),
@@ -131,12 +136,10 @@ class ScbCheck(Step):
                 effort="M" if lines >= 30 else "S",
                 fix=("Extract the shared block into one function, or delete the copy that is no longer used. "
                      "Pass the real differences as a few parameters."),
-                done_when="scb-check no longer reports this duplicate group and the safety net passes."))
-        return out
+                done_when="scb-check no longer reports this duplicate group and the safety net passes.")
 
-    def complexity_issues(self, src: Path, flags, scope) -> list:
+    def complexity_issues(self, src: Path, flags, scope) -> Iterator[Issue]:
         """One issue per function over the CC threshold, with its cognitive complexity as evidence."""
-        out = []
         for fn in flags.findings.high_cc_functions:
             file = rel(src, fn.file)
             line = fn.start_line
@@ -144,7 +147,7 @@ class ScbCheck(Step):
             sloc = fn.sloc
             d = scope.at_def_line(file, line) or Def(line, line, fn.name, line, "function")
             mass = cc * math.sqrt(sloc)
-            out.append(self.issue(
+            yield self.issue(
                 "CX", "complexity", "cc", "complex" if mass >= self.settings["medium_mass"] else "complex-small",
                 f"`{d.qualname}` has cyclomatic complexity {cc} ({sloc} SLOC)",
                 file=file, symbol=d.qualname, line=d.start, end_line=d.end,
@@ -157,8 +160,7 @@ class ScbCheck(Step):
                      "If every branch is needed and it reads clearly, dismiss it with that reason. Add a "
                      "characterization test first."),
                 done_when=("scb-check no longer lists it (CC <= 10), or it is gone or dismissed with "
-                           "a reason, and the safety net passes.")))
-        return out
+                           "a reason, and the safety net passes."))
 
 
 def analyze(root: Path, files: list) -> tuple:
@@ -168,7 +170,7 @@ def analyze(root: Path, files: list) -> tuple:
     from scb_check.pipeline import analyze_files
 
     package = distribution("ast-grep-cli")
-    sg = next(package.locate_file(f) for f in package.files or () if f.name == "sg")
+    sg = next(str(package.locate_file(f)) for f in package.files or () if f.name == "sg")
     path = os.environ.get("PATH", "")
     os.environ["PATH"] = f"{Path(sg).parent}{os.pathsep}{path}"
     log = io.StringIO()

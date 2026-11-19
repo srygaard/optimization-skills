@@ -2,29 +2,30 @@
 
 import re
 from pathlib import Path, PurePosixPath
+from typing import ClassVar
 
 from utils.git import git
-from tools.base import Result, Step
+from tools.base import Issue, Result, Step
 
 
 class Clutter(Step):
     """Tracked files that are by-products of the work, not part of the project."""
 
     name = "clutter"
-    policy = {
+    policy: ClassVar[dict] = {
         "clutter-output": "generated output at the repo root (images, molecules, logs, arrays) the README doesn't show",
         "clutter-scratch": "scratch and backup files: Untitled notebooks, copies (`x copy.py`, `x_copy.py`), `_old` "
                            "and `.bak` files, old/ and tmp/ folders",
         "clutter-notes": "working notes at the repo root: plans, proposals, TODO and notes files",
     }
-    output_suffixes = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf", ".log", ".out", ".err", ".sdf", ".mol",
+    output_suffixes: ClassVar[set] = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf", ".log", ".out", ".err", ".sdf", ".mol",
                        ".mol2", ".pdb", ".xyz", ".pml", ".npy", ".npz", ".pt", ".pth", ".ckpt", ".pkl", ".pickle",
                        ".h5"}
     scratch = re.compile(r"(?i)(?:^|/)untitled[^/]*$|[ _-]copy(?: ?\d+)?\.[^/.]+$|_old\.[^/.]+$|\.(?:bak|orig|swp)$"
                          r"|~$|(?:^|/)(?:old|\w+_old|backup|tmp)/")
     notes = re.compile(r"(?i)^[^/]*(?:plan|proposal|todo)[^/]*\.(?:md|txt)$|^notes?\.(?:md|txt)$")
     # kind -> (what its summary calls the files, fix)
-    advice = {
+    advice: ClassVar[dict] = {
         "clutter-output": ("generated files at the repo root",
                            "`git rm` them and add their patterns to .gitignore. Keep a figure the README should show "
                            "under docs/ and link it."),
@@ -58,12 +59,14 @@ class Clutter(Step):
             return "clutter-output"
         return ""
 
-    def clutter_issue(self, kind: str, paths: list) -> dict:
+    def clutter_issue(self, kind: str, paths: list) -> Issue:
         label, fix = self.advice[kind]
-        shown = ", ".join(f"`{f}`" for f in paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
+        shown = ", ".join(f"`{f}`" for f in paths[:3])
+        if len(paths) > 3:
+            shown += f" and {len(paths) - 3} more"
         return self.issue("CLUT", "readiness", kind, kind, f"{len(paths)} {label}: {shown}", key=f"CLUT|{kind}",
                           evidence={"files": paths}, effort="S", fix=fix,
-                          done_when="`cleanup.py measure` no longer lists them.")
+                          done_when="`vibecheck.py measure` no longer lists them.")
 
 
 def readme_text(repo: Path, files: list) -> str:

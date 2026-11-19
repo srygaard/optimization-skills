@@ -59,10 +59,10 @@ def docstring_and_import_lines(tree: ast.Module) -> set:
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            out.update(range(node.lineno, node.end_lineno + 1))
+            out.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
         elif isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and \
                 ast.get_docstring(node, clean=False) is not None:
-            out.update(range(node.body[0].lineno, node.body[0].end_lineno + 1))
+            out.update(range(node.body[0].lineno, (node.body[0].end_lineno or node.body[0].lineno) + 1))
     return out
 
 
@@ -74,6 +74,18 @@ class Def(NamedTuple):
     qualname: str
     def_line: int
     kind: str  # "function" or "class"
+
+
+def collect_defs(node, prefix: str, defs: list):
+    """Append a Def for every function and class under `node`, depth first, qualifying each name with `prefix`."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start = min([child.lineno] + [x.lineno for x in child.decorator_list])
+            defs.append(Def(start, child.end_lineno or child.lineno, prefix + child.name, child.lineno,
+                            "class" if isinstance(child, ast.ClassDef) else "function"))
+            collect_defs(child, prefix + child.name + ".", defs)
+        else:
+            collect_defs(child, prefix, defs)
 
 
 class Scope:
@@ -96,19 +108,8 @@ class Scope:
                 continue
             self.code_lines[rel] = code_lines(text, tree)
             self.globals[rel] = module_globals(tree)
-            defs = self.defs[rel] = []
-
-            def walk(node, prefix):
-                for child in ast.iter_child_nodes(node):
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                        start = min([child.lineno] + [x.lineno for x in child.decorator_list])
-                        defs.append(Def(start, child.end_lineno, prefix + child.name, child.lineno,
-                                        "class" if isinstance(child, ast.ClassDef) else "function"))
-                        walk(child, prefix + child.name + ".")
-                    else:
-                        walk(child, prefix)
-
-            walk(tree, "")
+            self.defs[rel] = []
+            collect_defs(tree, "", self.defs[rel])
 
     def enclosing(self, rel: str, line: int) -> Def | None:
         """The innermost function or class whose span holds `line`."""
@@ -120,7 +121,13 @@ class Scope:
 
     def at_def_line(self, rel: str, line: int) -> Def | None:
         """The function or class defined on `line`, else the one that holds it."""
-        return next((d for d in self.defs.get(rel, ()) if d.def_line == line), None) or self.enclosing(rel, line)
+        exact = next((
+            d
+            for d
+            in self.defs.get(rel, ())
+            if d.def_line == line
+        ), None)
+        return exact or self.enclosing(rel, line)
 
     def qualname(self, rel: str, line: int) -> str:
         """The qualified name of what holds `line`, or "<module>"."""

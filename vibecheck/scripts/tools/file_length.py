@@ -1,5 +1,7 @@
 """Source file length in code lines, from the scope's index."""
 
+from typing import ClassVar
+
 from tools.base import Metric, Result, Step
 
 
@@ -7,7 +9,7 @@ class FileLength(Step):
     """How long the source files are, in code lines (comments, docstrings and imports aside), and which to split."""
 
     name = "file-length"
-    policy = {
+    policy: ClassVar[dict] = {
         "long-file": "source file over {long_file_lines} code lines (comments, docstrings and imports aside): "
                      "split it into modules",
     }

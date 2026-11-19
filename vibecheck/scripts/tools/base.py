@@ -4,7 +4,7 @@ of each finding and the settings they depend on. Every tool returns a `Result` o
 import hashlib
 import string
 from abc import ABC, abstractmethod
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple, TypedDict
 
 from scope import Scope
 
@@ -13,11 +13,34 @@ class ToolError(Exception):
     """A tool could not measure: it failed, or returned something this script doesn't recognize."""
 
 
+class Issue(TypedDict):
+    """One finding, as it is stored in issues.json. A dict, not a dataclass: issues.json is the source of
+    truth and is edited by hand, `merge` updates an issue in place so a field an agent added survives, and an
+    agent may write an issue with only id, category, severity and summary, which `check_issues` fills in."""
+
+    id: str
+    source: str  # the tool that found it, or "agent"
+    category: str
+    rule: str
+    severity: str  # a Severity name
+    file: str
+    line: int | None
+    end_line: int | None
+    symbol: str
+    summary: str
+    evidence: dict
+    fix: str
+    done_when: str
+    effort: str
+    status: str  # open, fixed or dismissed
+    note: str
+
+
 class Result(NamedTuple):
     """What a tool found. A step with nothing to read sets `skipped`: it measured nothing, so its
     earlier issues stay open instead of being closed as fixed."""
 
-    issues: list
+    issues: list[Issue]
     metrics: dict
     skipped: str = ""
     notes: dict | None = None  # metric -> why it is incomplete
@@ -43,9 +66,9 @@ class Tool:
     """
 
     name = ""  # the `source` of its issues: merge() closes an open issue its source no longer finds
-    package = ""  # its PyPI distribution, pinned in cleanup.py's script header; "" when not from PyPI
+    package = ""  # its PyPI distribution, pinned in vibecheck.py's script header; "" when not from PyPI
     version = ""  # the pinned version its code is written against; the header pins a package at the same one
-    policy: dict = {}  # policy key -> what it covers
+    policy: ClassVar[dict] = {}  # policy key -> what it covers
     metrics: tuple = ()  # the Metric of each scorecard number its measure step reports, in scorecard order
 
     def __init__(self, severity: dict | None = None, settings: dict | None = None):
@@ -55,7 +78,16 @@ class Tool:
         self.settings = settings or {}
         if self.severity.keys() != self.policy.keys():
             raise ValueError(f"{self.name}: severities for {sorted(self.severity)}, but its policy is {sorted(self.policy)}")
-        texts = [*self.policy.values(), *(text for m in self.metrics for text in (m.label, m.warn, m.description))]
+        texts = [
+            *self.policy.values(),
+            *(
+                text
+                for m
+                in self.metrics
+                for text
+                in (m.label, m.warn, m.description)
+            ),
+        ]
         named = {field for text in texts for _, field, _, _ in string.Formatter().parse(text) if field}
         if missing := named - self.settings.keys():
             raise ValueError(f"{self.name}: no setting for {', '.join(sorted(missing))}")
@@ -73,9 +105,26 @@ class Tool:
     def adjust(self, found: list):
         """Change the issues that all the measure steps found, once every step has run. Only vulture does."""
 
-    def issue(self, prefix: str, category: str, rule: str, policy: str, summary: str, *, file="", symbol="", key="",
-              line=None, end_line=None, evidence=None, fix="", done_when="", effort="S", status="open",
-              note="") -> dict:
+    def issue(
+        self,
+        prefix: str,
+        category: str,
+        rule: str,
+        policy: str,
+        summary: str,
+        *,
+        file="",
+        symbol="",
+        key="",
+        line=None,
+        end_line=None,
+        evidence=None,
+        fix="",
+        done_when="",
+        effort="S",
+        status="open",
+        note="",
+    ) -> Issue:
         """An issue this tool reports, with the severity of its `policy` row. IDs hash stable facts (never line
         numbers), so re-runs keep them."""
         basis = key or "|".join((category, rule, file, symbol))

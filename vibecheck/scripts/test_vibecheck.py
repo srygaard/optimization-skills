@@ -3,10 +3,10 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Tests for cleanup.py: offline checks of its parsing and bookkeeping, then an end-to-end run.
+"""Tests for vibecheck.py: offline checks of its parsing and bookkeeping, then an end-to-end run.
 
-    test_cleanup.py             everything; the end-to-end run needs uv and the network (a few minutes)
-    test_cleanup.py --offline   only the offline checks (about a second)
+    test_vibecheck.py             everything; the end-to-end run needs uv and the network (a few minutes)
+    test_vibecheck.py --offline   only the offline checks (about a second)
 
 The end-to-end run builds a throwaway repo with one known instance of each finding. Its fake secrets
 and internal references are assembled at runtime, so the leak scan doesn't flag this file.
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
 import measure
@@ -31,7 +32,7 @@ import tools
 from tools import deptry, vulture
 from tools.base import Result, Step
 
-CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
+VIBECHECK = Path(__file__).resolve().parent / "vibecheck.py"
 failures = []
 
 
@@ -57,9 +58,9 @@ def offline():
     check(all(sev in state.Severity.__members__ and when for sev, when in rows.values()), "every policy row has a severity")
     check(len(rows) == sum(len(t.policy) for t in tools.ALL), "no policy key is set by two tools")
     check(all(isinstance(t, Step) for t in tools.MEASURE), "every measure step is a Step")
-    pinned = set(re.findall(r'"([\w.-]+==[\w.]+)"', CLEANUP.read_text().split("# ///")[1]))
+    pinned = set(re.findall(r'"([\w.-]+==[\w.]+)"', VIBECHECK.read_text().split("# ///")[1]))
     check(pinned == {f"{t.package}=={t.version}" for t in tools.ANALYZERS},
-          "cleanup.py's header pins exactly the analyzers, at the versions their classes name")
+          "vibecheck.py's header pins exactly the analyzers, at the versions their classes name")
     try:
         vulture.Vulture(severity={"dead-large": "high"})
         refused = False
@@ -93,7 +94,7 @@ def offline():
 
     class Ok(Step):
         name = "a"
-        policy = {"x": "a test row"}
+        policy: ClassVar[dict] = {"x": "a test row"}
 
         def measure(self, scope):
             return Result([self.issue("T", "bug", "x", "x", "found by a")], {"m": 1})
@@ -123,9 +124,9 @@ def offline():
          ["contperceptual", "losses", "modules", "ldm"], True, False),  # re-exported by losses/__init__.py
         (("utils.py", "# matlab 'imresize' function\n", True), "imresize", ["utils"], False, True),
     ]
-    results = [vulture._named_in([ref], name, module) for ref, name, module, _, _ in cases]
+    results = [vulture._named_in([vulture.Ref(*ref)], name, module) for ref, name, module, _, _ in cases]
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
-              for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
+              for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases, strict=True)),
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -221,7 +222,8 @@ def offline():
           "a skipped or broken step is not measured, and the other steps still count")
     check(found[0]["source"] == "a", "issues carry the name of the step that found them")
     data = {"issues": []}
-    state.merge(data, [dict(cx("v"), source="b")], {"b"})
+    minimal: list = [dict(cx("v"), source="b")]  # merge fills the rest in
+    state.merge(data, minimal, {"b"})
     state.merge(data, found, measured)
     check(data["issues"][0]["status"] == "open", "a step that measured nothing doesn't close its issues")
 
@@ -262,8 +264,16 @@ def build_repo(root: Path) -> dict:
     sh("add", "-A")
     sh("commit", "-qm", "add a key that will only live in history")
     sh("rm", "-q", "old_key.py")
-    branches = "\n".join(f"    {'if' if n == 0 else 'elif'} kind == 'k{n}':\n        return x + {n}" for n in range(12))
-    legacy = "\n".join(f"    {'if' if n == 0 else 'elif'} mode == 'm{n}':\n        y = [v * {n} for v in y]" for n in range(12))
+    branches = "\n".join(
+        f"    {'if' if n == 0 else 'elif'} kind == 'k{n}':\n        return x + {n}"
+        for n
+        in range(12)
+    )
+    legacy = "\n".join(
+        f"    {'if' if n == 0 else 'elif'} mode == 'm{n}':\n        y = [v * {n} for v in y]"
+        for n
+        in range(12)
+    )
     body = "\n".join(f"        row = row * {n + 2} + {n}" for n in range(10))
     write("README.md", f"# demo\n\nContact: {email}\n")
     write("pyproject.toml", f'[project]\nname = "demo"\nauthors = [{{name = "Demo", email = "{email}"}}]\n')
@@ -358,7 +368,7 @@ def end_to_end():
     transcript = []
 
     def cli(*args):
-        p = subprocess.run(["uv", "run", "--quiet", "--script", str(CLEANUP), *args], capture_output=True, text=True)
+        p = subprocess.run(["uv", "run", "--quiet", "--script", str(VIBECHECK), *args], capture_output=True, text=True)
         transcript.append(p.stdout + p.stderr)
         return p
 
@@ -425,7 +435,8 @@ def end_to_end():
               "a module nothing imports -> one high issue, not one per function in it")
         check(not one("dead-code", "unused-module", file="pkg/main.py"), "a script with a __main__ guard is not dead")
         check(not one("dead-code", "unreachable", file="pkg/main.py"), "the body of `if True:` is not dead code")
-        check(not any(i["file"].startswith("pkg/tests/") for i in data["issues"]), "nested tests/ folders are out of scope")
+        check(not any(i["file"].startswith("pkg/tests/") for i in data["issues"]),
+              "nested tests/ folders are out of scope")
         check(one("readiness", "clutter-output", severity="high") and one("readiness", "clutter-scratch", severity="high")
               and one("readiness", "clutter-notes", severity="medium"),
               "a root image, an Untitled notebook and a PLAN.md -> clutter issues")
@@ -523,7 +534,12 @@ def end_to_end():
         new = [rescanned[i] for i in set(rescanned) - scanned]
         check(data["leak_scan"]["history"] == history_commit and scanned <= set(rescanned),
               "a later scan reads only the new commits, and keeps the IDs earlier scans gave")
-        check([(i["file"], i["severity"], i["evidence"]["at_head"]) for i in new] == [("notes.py", "critical", False)],
+        found_at = [
+            (i["file"], i["severity"], i["evidence"]["at_head"])
+            for i
+            in new
+        ]
+        check(found_at == [("notes.py", "critical", False)],
               "a secret committed and removed between two scans is found: critical, only in history")
         moved = rescanned[leak["id"]]
         check(moved["evidence"]["at_head"] and (moved["file"], moved["line"]) == ("pkg/config.py", 3),
@@ -542,7 +558,7 @@ def end_to_end():
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
         check("## Severity rules" in report and "- **critical:** credential" in report,
               "report ends with the severity rules")
-        p = subprocess.run([sys.executable, str(repo / ".vibecheck/scripts/cleanup.py"), "compare", r, "baseline"],
+        p = subprocess.run([sys.executable, str(repo / ".vibecheck/scripts/vibecheck.py"), "compare", r, "baseline"],
                            capture_output=True, text=True)
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .vibecheck/scripts/ runs on its own")
         cli("leaks", r, "--history")
@@ -554,7 +570,7 @@ def end_to_end():
         check(json.loads((repo / ".vibecheck/issues.json").read_text())["leak_scan"]["history"] == amended,
               "a commit read before that has left the history (amended) makes the next scan read every commit")
         check(not any(f.name == "__pycache__" for f in (repo / ".vibecheck").rglob("*")) and
-              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .vibecheck/ or the skill folder")
+              not any(VIBECHECK.parent.rglob("__pycache__")), "no __pycache__ in .vibecheck/ or the skill folder")
         files = [f.read_text(errors="replace") for f in (repo / ".vibecheck").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
         check(not leaked, f"no plaintext secret in output or .vibecheck/ {leaked or ''}")

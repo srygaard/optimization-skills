@@ -5,9 +5,10 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 from utils.process import run
-from tools.base import Metric, Result, Step, ToolError
+from tools.base import Issue, Metric, Result, Step, ToolError
 
 
 class PipAudit(Step):
@@ -16,26 +17,26 @@ class PipAudit(Step):
     name = "pip-audit"
     package = "pip-audit"
     version = "2.10.1"
-    policy = {
+    policy: ClassVar[dict] = {
         "vuln-fixable": "dependency with a known vulnerability and a fixed release",
         "vuln-unfixed": "known vulnerability without a fixed release",
         "pins-none": "no lockfile or pinned requirements: can't audit, installs aren't reproducible",
     }
     metrics = (Metric("vulnerable_deps", "Vulnerable deps", description="pinned dependencies with known vulnerabilities"),)
 
-    def vuln_issue(self, name: str, version: str, vulns: list, label: str) -> dict:
+    def vuln_issue(self, name: str, version: str, vulns: list, label: str) -> Issue:
         """A vulnerable dependency, with the lowest release that fixes all of its known vulnerabilities."""
-        vulns = {v.id: v for v in vulns}
-        fixed = [min(v.fix_versions) for v in vulns.values() if v.fix_versions]
+        by_id = {v.id: v for v in vulns}
+        fixed = [min(v.fix_versions) for v in by_id.values() if v.fix_versions]
         target = str(max(fixed)) if fixed else None
-        ids = sorted(vulns)
+        ids = sorted(by_id)
         return self.issue(
             "VULN", "vulnerable-dependency", "pip-audit", "vuln-fixable" if target else "vuln-unfixed",
             f"{name} {version}: {len(ids)} known vulnerabilities ({', '.join(ids[:3])}"
             f"{', ...' if len(ids) > 3 else ''})" + (f"; fixed in {target}" if target else "; no fix yet"),
             key=f"VULN|{name.lower()}", file=label, symbol=name,
             evidence={"version": version, "vulns": ids, "fix_to": target,
-                      "aliases": sorted({a for v in vulns.values() for a in v.aliases})[:10]},
+                      "aliases": sorted({a for v in by_id.values() for a in v.aliases})[:10]},
             fix=(f"Bump {name} to >= {target} in the dependency spec, then run the safety net."
                  if target else "No fixed release yet: note it, or drop the dependency if it is easy."),
             done_when=f"pip-audit reports no vulnerabilities for {name}.")
@@ -53,7 +54,7 @@ class PipAudit(Step):
                     "No lockfile or pinned requirements: dependencies can't be audited and installs aren't "
                     "reproducible", key="DEPS|pin", effort="S",
                     fix="Commit a lockfile (uv.lock) or a fully pinned requirements.txt.",
-                    done_when="`cleanup.py measure` runs pip-audit without 'not measured'.")], {},
+                    done_when="`vibecheck.py measure` runs pip-audit without 'not measured'.")], {},
                     skipped="no pinned source (uv.lock, pylock, pinned requirements, .venv)")
             try:
                 audited = list(Auditor(PyPIService(timeout=15)).audit(source))

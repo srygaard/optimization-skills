@@ -5,14 +5,14 @@
 # ///
 """Measure, track and report the cleanup of a Python ML repo before open-sourcing.
 
-    cleanup.py leaks   REPO [--internal R] [--history]  secrets and internal refs: each commit once, and HEAD
-    cleanup.py measure REPO [--label L] [--exclude G]  this commit's metrics + mechanical issues
-    cleanup.py compare REPO [BASE] [--to REF]         before/after table and regression warnings
-    cleanup.py report  REPO                           render REPO/.vibecheck/report.md
+    vibecheck.py leaks   REPO [--internal R] [--history]  secrets and internal refs: each commit once, and HEAD
+    vibecheck.py measure REPO [--label L] [--exclude G]  this commit's metrics + mechanical issues
+    vibecheck.py compare REPO [BASE] [--to REF]         before/after table and regression warnings
+    vibecheck.py report  REPO                           render REPO/.vibecheck/report.md
 
 Everything is written to REPO/.vibecheck/, which ignores itself in git: issues.json, report.md, and a folder
 per measured commit with its metrics.json. Secret values never reach
-stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_cleanup.py.
+stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_vibecheck.py.
 
 The analyzers are pinned above and run in this script's environment, so `measure` needs `uv run --script`
 (the shebang does it); the other commands need only the stdlib. Betterleaks is not on PyPI, so it is
@@ -30,7 +30,7 @@ from report import cmd_compare, cmd_report
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("leaks", help="scan for secrets and internal refs: the commits never read, and HEAD")
     p.add_argument("repo")

@@ -7,8 +7,9 @@ import hashlib
 import json
 from enum import IntEnum
 from pathlib import Path
+from typing import TypedDict
 
-from tools.base import Metric
+from tools.base import Issue, Metric
 from utils.git import git, head, repo_root
 from utils.process import run
 
@@ -30,6 +31,23 @@ def now() -> str:
 
 # --- .vibecheck/ --------------------------------------------------------------------------------------
 
+class Snapshot(TypedDict):
+    """One measured commit, as it is stored in <commit time>-<commit>/metrics.json."""
+
+    label: str
+    date: str
+    commit: str
+    dirty: bool
+    scope: list  # the excludes the metrics were measured with
+    tools: dict  # tool -> version
+    files: int
+    metrics: dict  # metric key -> value
+    not_measured: dict  # metric key -> why it is missing
+    open_issues: dict  # severity name -> count
+    release_status: str  # ok, or blocked while a critical or high issue is open
+
+
+
 
 class Cleanup:
     """A repo's .vibecheck/ folder: its issues.json, loaded and checked, and the metrics of each measured commit."""
@@ -50,7 +68,7 @@ class Cleanup:
         self.path = self.dir / "issues.json"
         self.data = load_issues(self.path)
 
-    def open_issues(self, *severities: Severity) -> list:
+    def open_issues(self, *severities: Severity) -> list[Issue]:
         """The open issues, of the given severities if any are given."""
         return [
             i for i in self.data["issues"]
@@ -64,7 +82,7 @@ class Cleanup:
     def require_leak_scan(self):
         """Stop the command unless the leak scan ran on HEAD."""
         if not self.leak_scan_current():
-            raise SystemExit("the leak scan is mandatory: run `cleanup.py leaks <repo>` on the current commit first")
+            raise SystemExit("the leak scan is mandatory: run `vibecheck.py leaks <repo>` on the current commit first")
 
     def release_status(self) -> str:
         """Blocked while any critical or high issue is open, or while the leak scan is older than HEAD."""
@@ -77,12 +95,12 @@ class Cleanup:
         epoch = git(self.repo, "show", "-s", "--format=%ct", commit).strip()
         return self.dir / f"{epoch}-{commit[:12]}" / "metrics.json"
 
-    def snapshots(self) -> list:
+    def snapshots(self) -> list[Snapshot]:
         """The metrics of every measured commit, oldest first."""
         snaps = [json.loads(p.read_text()) for p in self.dir.glob("*/metrics.json")]
         return sorted(snaps, key=lambda s: s["date"])
 
-    def snapshot(self, ref: str) -> dict:
+    def snapshot(self, ref: str) -> Snapshot:
         """The metrics recorded for `ref`: a `--label` (its latest use), a commit, or any git ref. Stops the
         command if that commit was never measured."""
         p = run(["git", "-C", self.repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
@@ -94,13 +112,13 @@ class Cleanup:
             raise SystemExit(f"no metrics for '{ref}' (measured: {measured})")
         return matches[-1]
 
-    def baseline(self) -> dict | None:
+    def baseline(self) -> Snapshot | None:
         """The metrics labelled "baseline", or else those of the first measured commit."""
         snaps = self.snapshots()
         named = [s for s in snaps if s.get("label") == "baseline"]
         return named[-1] if named else (snaps[0] if snaps else None)
 
-    def count_issues(self, snap: dict):
+    def count_issues(self, snap: Snapshot):
         """Set the snapshot fields that come from the issues rather than from the tools."""
         still_open = self.open_issues()
         snap["metrics"]["red_flags_open"] = sum(i["category"] == "red-flag" for i in still_open)
@@ -108,7 +126,7 @@ class Cleanup:
         snap["open_issues"] = {s.name: sum(i["severity"] == s.name for i in still_open) for s in Severity}
         snap["release_status"] = self.release_status()
 
-    def write_snapshot(self, snap: dict) -> Path:
+    def write_snapshot(self, snap: Snapshot) -> Path:
         """Count the issues into `snap` and write it to its commit's folder."""
         self.count_issues(snap)
         path = self.snapshot_path(snap["commit"])
@@ -131,8 +149,12 @@ class Cleanup:
         data["commit"] = self.commit
         data["generated"] = now()
         data["release_status"] = self.release_status()
-        meta = [f"  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}," for k, v in data.items()
-                if k not in ("issues", "defaults")]
+        meta = [
+            f"  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)},"
+            for k, v
+            in data.items()
+            if k not in ("issues", "defaults")
+        ]
         issues = ",\n".join("    " + json.dumps(i, ensure_ascii=False) for i in data["issues"])
         defaults = json.dumps(data.get("defaults", {}), separators=(",", ":"))
         self.path.write_text("{\n" + "\n".join(meta) + f'\n  "issues": [\n{issues}\n  ],\n'
@@ -149,7 +171,7 @@ def load_issues(path: Path) -> dict:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
         raise SystemExit(f"{path} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .vibecheck/ is not in "
-            "git, so there is no older copy")
+            "git, so there is no older copy") from None
     if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list):
         raise SystemExit(f"{path} must be an object with an \"issues\" list")
     data.setdefault("tools", {})
@@ -174,7 +196,9 @@ def check_issues(issues: list, path: Path):
             continue
         for k, v in defaults.items():
             i.setdefault(k, dict(v) if isinstance(v, dict) else v)
-        for k, allowed in (("severity", [s.name for s in Severity]), ("status", statuses), ("category", categories)):
+        for k, allowed in (("severity", [s.name for s in Severity]),
+                           ("status", statuses),
+                           ("category", categories)):
             if i[k] not in allowed:
                 problems.append(f'{ident}: {k} "{i[k]}" is not one of {", ".join(allowed)}')
         if i["status"] == "dismissed" and not i["note"]:
@@ -190,7 +214,7 @@ def _digest(value) -> str:
     return hashlib.sha1(json.dumps(value).encode()).hexdigest()[:10]
 
 
-def merge(data: dict, found: list, sources: set):
+def merge(data: dict, found: list[Issue], sources: set):
     """Fold fresh findings into issues.json.
 
     A field an agent edited (status, severity, fix, ...) survives; one still holding the value the tool
@@ -209,12 +233,18 @@ def merge(data: dict, found: list, sources: set):
         seen.add(ident)
         old = by_id.get(ident)
         prev = defaults.get(ident)
-        defaults[ident] = {k: _digest(new[k]) for k in agent_fields}
+        fields = dict(new)  # agent_fields are names, so this reads them dynamically
+        defaults[ident] = {k: _digest(fields[k]) for k in agent_fields}
         if old is None:
             data["issues"].append(new)
             by_id[ident] = new
             continue
-        edited = {k: old[k] for k in agent_fields if k in old and (prev is None or _digest(old[k]) != prev.get(k))}
+        edited = {
+            k: old[k]
+            for k
+            in agent_fields
+            if k in old and (prev is None or _digest(old[k]) != prev.get(k))
+        }
         was_fixed = old["status"] == "fixed"
         old.update(new)
         old.update(edited)

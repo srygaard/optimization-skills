@@ -1,6 +1,7 @@
 """Whether the repo root has a LICENSE file and a README."""
 
 import re
+from typing import ClassVar
 
 from utils.git import git
 from tools.base import Result, Step
@@ -10,7 +11,7 @@ class License(Step):
     """A LICENSE file and a README at the repo root."""
 
     name = "license"
-    policy = {
+    policy: ClassVar[dict] = {
         "license-missing": "no LICENSE file: nobody may use the code",
         "readme-missing": "no README",
     }

@@ -1,5 +1,7 @@
 """Large files in the repo at HEAD: checkpoints, datasets and other blobs that shouldn't ship."""
 
+from typing import ClassVar
+
 from utils.git import git
 from tools.base import Result, Step
 
@@ -8,7 +10,7 @@ class LargeFiles(Step):
     """Files at HEAD too large to ship."""
 
     name = "large-files"
-    policy = {
+    policy: ClassVar[dict] = {
         "large-file": "file over {large_file_mb} MB at HEAD",
     }
 

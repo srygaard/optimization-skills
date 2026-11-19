@@ -1,4 +1,4 @@
-"""`cleanup.py measure`: run the tools, merge their issues, record the metrics of this commit."""
+"""`vibecheck.py measure`: run the tools, merge their issues, record the metrics of this commit."""
 
 import sys
 import warnings
@@ -6,7 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from report import print_scorecard
 from scope import Scope, shipped_files
-from state import Cleanup, merge, now
+from state import Cleanup, Snapshot, merge, now
 from tools import ANALYZERS, MEASURE
 from tools.base import ToolError
 from utils.git import git
@@ -25,7 +25,7 @@ def tool_versions() -> dict:
             installed = ""
         if installed != m.version:
             found = f"{installed} is installed" if installed else "it is not installed"
-            raise SystemExit(f"{m.package} {m.version} is pinned but {found}: run `uv run --script cleanup.py ...`, "
+            raise SystemExit(f"{m.package} {m.version} is pinned but {found}: run `uv run --script vibecheck.py ...`, "
                              "which installs the versions its header pins")
     return {m.name: m.version for m in ANALYZERS}
 
@@ -56,7 +56,7 @@ def run_steps(scope, steps=MEASURE) -> tuple:
 
 
 def cmd_measure(a):
-    """`cleanup.py measure`: run every measure step, fold their issues into issues.json, and write this commit's
+    """`vibecheck.py measure`: run every measure step, fold their issues into issues.json, and write this commit's
     metrics to .vibecheck/<commit time>-<commit>/metrics.json."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
@@ -72,8 +72,9 @@ def cmd_measure(a):
         scope = Scope(repo, shipped_files(repo, excludes))
         found, metrics, not_measured, measured = run_steps(scope)
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
-    snap = {"label": a.label, "date": now(), "commit": cleanup.commit, "dirty": dirty, "scope": excludes,
-            "tools": tools, "files": len(scope.files), "metrics": {}, "not_measured": {}}
+    snap: Snapshot = {"label": a.label, "date": now(), "commit": cleanup.commit, "dirty": dirty,
+                      "scope": excludes, "tools": tools, "files": len(scope.files), "metrics": {},
+                      "not_measured": {}, "open_issues": {}, "release_status": ""}
     snap["metrics"].update(metrics)
     snap["not_measured"].update(not_measured)
     if scope.syntax_errors:

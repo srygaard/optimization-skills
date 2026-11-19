@@ -26,4 +26,9 @@ class Suppressions(Step):
 
 def comments(text: str) -> list:
     """The comments in a module's source."""
-    return [t.string for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type == tokenize.COMMENT]
+    return [
+        t.string
+        for t
+        in tokenize.generate_tokens(io.StringIO(text).readline)
+        if t.type == tokenize.COMMENT
+    ]

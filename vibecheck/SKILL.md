@@ -47,14 +47,17 @@ A router. One script measures, tracks and reports; depth lives in `references/`.
 
 ```bash
 S=<this skill>/scripts
-$S/cleanup.py leaks   <repo> [--internal REGEX]   # 1. secret scan of every commit (mandatory)
-$S/cleanup.py measure <repo> --label baseline      # 2. this commit's scorecard + mechanical issues
-#                                                    3. review issues.json (section 3)
-$S/cleanup.py report  <repo>                       # 4. render .vibecheck/report.md
-#                                                    5. the user picks a phase, or hands the report on
-#                                                    6. fix loop: safety net, one commit per family of fix
-$S/cleanup.py leaks <repo> && $S/cleanup.py measure <repo>   # 7. after each commit
-$S/cleanup.py compare <repo> && $S/cleanup.py report <repo>  #    the baseline against this commit
+# 1. secret scan of every commit (mandatory)
+$S/vibecheck.py leaks   <repo> [--internal REGEX]
+# 2. this commit's scorecard + mechanical issues
+$S/vibecheck.py measure <repo> --label baseline
+# 3. review issues.json (section 3)
+# 4. render .vibecheck/report.md
+$S/vibecheck.py report <repo>
+# 5. the user picks a phase, or hands the report on
+# 6. fix loop: safety net, one commit per family of fix
+$S/vibecheck.py leaks <repo> && $S/vibecheck.py measure <repo>   # 7. after each commit
+$S/vibecheck.py compare <repo> && $S/vibecheck.py report <repo>  #    the baseline against this commit
 ```
 
 - The safety net goes under `tests/`, in its own commit, before the first refactor.
@@ -179,7 +182,7 @@ Edit `.vibecheck/issues.json` directly. Each call is a yes/no decision with a re
 
 ## 5. The script
 
-`scripts/cleanup.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
+`scripts/vibecheck.py` is the only entry point, a PEP 723 script whose header pins the analyzers:
 scb-check 0.2.0, vulture 2.16, deptry 0.25.1, pip-audit 2.10.1, ruff 0.15.7. Each tool's class names the same
 version (a test keeps them equal), and `measure` stops if another one is installed. The modules it
 imports sit next to it: `state` (issues.json, its severity scale and the snapshots), `scope` (the files
@@ -200,13 +203,13 @@ deptry's API exits the process. Betterleaks 1.9.0 is not on PyPI: the script dow
 unless the SHA-256 matches the pinned value, and caches it in `~/.cache/vibecheck/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
-- `scripts/test_cleanup.py` checks the bookkeeping offline (`--offline`, a second), then
+- `scripts/test_vibecheck.py` checks the bookkeeping offline (`--offline`, a second), then
   builds a throwaway repo with one known instance of each finding and checks all of them, including
   that no secret value reaches any output.
-- The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
-- `report` copies `cleanup.py`, its modules, `tools/` (which holds the leak rules, `betterleaks.toml`)
+- The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script vibecheck.py ...`.
+- `report` copies `vibecheck.py`, its modules, `tools/` (which holds the leak rules, `betterleaks.toml`)
   and `utils/` into `.vibecheck/scripts/`, so another agent can re-measure with
-  `.vibecheck/scripts/cleanup.py` without this skill.
+  `.vibecheck/scripts/vibecheck.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).

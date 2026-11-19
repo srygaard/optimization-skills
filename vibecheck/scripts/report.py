@@ -1,19 +1,19 @@
-"""Scorecards, `cleanup.py compare` and `cleanup.py report`."""
+"""Scorecards, `vibecheck.py compare` and `vibecheck.py report`."""
 
 import shutil
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from state import Cleanup, Severity
+from state import Cleanup, Severity, Snapshot
 from tools import policies, scorecard_metrics
 
 
 # --- scorecard -------------------------------------------------------------------------------------
 
-def scorecard(snaps: list) -> list:
+def scorecard(snaps: list[Snapshot]) -> Iterator[list]:
     """Rows of [metric, value per snapshot, delta (last minus first, with two or more), description] for every
     metric that any of the snapshots measured: the measure steps' in step order, then the open-issue counts.
     measure, compare and report all print these rows."""
-    rows = []
     for m in (*scorecard_metrics(), *Cleanup.metrics):
         vals = [s["metrics"].get(m.key) for s in snaps]
         if not m.label or all(v is None for v in vals):
@@ -21,8 +21,7 @@ def scorecard(snaps: list) -> list:
         row = [m.label, *("-" if v is None else m.form.format(v) for v in vals)]
         if len(snaps) >= 2:
             row.append(change(vals[0], vals[-1]))
-        rows.append(row + [m.description])
-    return rows
+        yield row + [m.description]
 
 
 def change(before, after) -> str:
@@ -32,12 +31,12 @@ def change(before, after) -> str:
     return f"{after - before:+,}" if isinstance(before, int) else f"{after - before:+.3f}"
 
 
-def column(snap: dict) -> str:
+def column(snap: Snapshot) -> str:
     """What a snapshot is called in a table: its label, or its commit."""
     return snap.get("label") or snap["commit"][:8]
 
 
-def print_scorecard(snap: dict):
+def print_scorecard(snap: Snapshot):
     at = f"  @ {snap['commit'][:8]}" if snap.get("label") else ""
     print(f"scorecard  {column(snap)}{at}{' (dirty)' if snap['dirty'] else ''}  "
           f"release: {snap['release_status'].upper()}")
@@ -52,15 +51,15 @@ def print_scorecard(snap: dict):
 # --- compare ---------------------------------------------------------------------------------------
 
 def cmd_compare(a):
-    """`cleanup.py compare`: two measured commits side by side, with the regressions between them. By default
+    """`vibecheck.py compare`: two measured commits side by side, with the regressions between them. By default
     the baseline and the latest."""
     cleanup = Cleanup(a.repo)
     cleanup.save()  # counts issues edited by hand into HEAD's metrics
     base = cleanup.snapshot(a.base) if a.base else cleanup.baseline()
     after = cleanup.snapshot(a.to) if a.to else (cleanup.snapshots() or [None])[-1]
     if base is None or after is None or after["commit"] == base["commit"]:
-        raise SystemExit("nothing to compare: commit, then run `cleanup.py measure` on the new commit")
-    rows = scorecard([base, after])
+        raise SystemExit("nothing to compare: commit, then run `vibecheck.py measure` on the new commit")
+    rows = list(scorecard([base, after]))
     for s in Severity:
         b = base["open_issues"][s.name]
         n = after["open_issues"][s.name]
@@ -72,19 +71,17 @@ def cmd_compare(a):
         print(f"warning: {w}")
 
 
-def comparison_warnings(base: dict, after: dict) -> list:
+def comparison_warnings(base: Snapshot, after: Snapshot) -> Iterator[str]:
     """Regressions in absolute terms. Ratios are not used: deleting clean code raises them on its own."""
-    out = []
     for m in scorecard_metrics():
         b = base["metrics"].get(m.key)
         n = after["metrics"].get(m.key)
         if m.warn and b is not None and n is not None and n > b:
-            out.append(f"{m.warn} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings")
+            yield f"{m.warn} went up ({b:,} -> {n:,}): cleanup should not add slop or hide findings"
     if base["tools"] != after["tools"]:
-        out.append("tool versions differ between the snapshots: numbers may not be comparable")
+        yield "tool versions differ between the snapshots: numbers may not be comparable"
     if base["scope"] != after["scope"]:
-        out.append("scope (excludes) differs between the snapshots: numbers are not comparable")
-    return out
+        yield "scope (excludes) differs between the snapshots: numbers are not comparable"
 
 
 # --- report ----------------------------------------------------------------------------------------
@@ -97,13 +94,13 @@ HOW_TO = """\
 5. Record each outcome in `.vibecheck/issues.json` (one issue per line; `grep <ID>` finds it): `status` `fixed`, or `dismissed` with a `note`. Re-measuring reopens a `fixed` issue the tools still detect. A false positive, a deliberate design, not worth the change, or a rotated key that stays in the local history are all valid reasons to dismiss. Bugs you find get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity` and a `summary`; the other fields are optional) and their own commit, never inside a refactor. Don't edit this report; regenerate it.
 6. No nitpicks: only change what makes the code meaningfully easier to understand, use or change. A refactor that adds lines needs a reason. Never pack code to save lines (`a, b = f(), g()`, several statements on one line): LOC should fall because code is gone.
 7. While refactoring: if a file holds many related pure functions, consider organizing them into a class; if a function returns a tuple, consider a named tuple; give each somewhat complex function or method you touch (roughly CC above 5) a one-sentence docstring on its purpose if it has none; don't introduce new globals (keep a constant next to its only user, pass state as arguments); and instead of a catch-all `common.py` or `utils.py`, put helpers in a `utils/` package with one module per purpose (`utils/paths.py`, `utils/timing.py`, `utils/git.py`), never named after a standard-library module such as `time.py` or `json.py`, which it would shadow; and use `pathlib` (`root / "data" / name`, `.read_text()`, `.exists()`) instead of string paths built with `os.path.join` or f-strings.
-8. Re-measure after each commit, so `.vibecheck/<commit time>-<commit>/metrics.json` tracks the work: `.vibecheck/scripts/cleanup.py leaks .`, `.vibecheck/scripts/cleanup.py measure .`, then `.vibecheck/scripts/cleanup.py compare .` (the baseline against this commit) and `.vibecheck/scripts/cleanup.py report .` (needs uv)."""
+8. Re-measure after each commit, so `.vibecheck/<commit time>-<commit>/metrics.json` tracks the work: `.vibecheck/scripts/vibecheck.py leaks .`, `.vibecheck/scripts/vibecheck.py measure .`, then `.vibecheck/scripts/vibecheck.py compare .` (the baseline against this commit) and `.vibecheck/scripts/vibecheck.py report .` (needs uv)."""
 
 def cell(text) -> str:
     return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
 
 
-def md_table(header: list, rows: list) -> list:
+def md_table(header: list, rows: Iterable) -> list:
     return ["| " + " | ".join(header) + " |", "|" + "---|" * len(header),
             *("| " + " | ".join(cell(x) for x in row) + " |" for row in rows)]
 
@@ -127,7 +124,7 @@ def report_header(cleanup: Cleanup) -> list:
             f"Commit `{data['commit'][:8]}` · generated {data['generated'][:10]} · "
             f"release status: **{status}**{reason}{blocking}", "",
             "Source of truth: `.vibecheck/issues.json`, and `.vibecheck/<commit time>-<commit>/metrics.json` for each measured commit. "
-            "This file is generated by `cleanup.py report`.", "",
+            "This file is generated by `vibecheck.py report`.", "",
             "## How to work this report", "", HOW_TO, "", "## Scorecard", ""]
 
 
@@ -140,11 +137,11 @@ def report_columns(cleanup: Cleanup) -> list:
     return [base, *[s for s in cleanup.snapshots() if s["date"] > base["date"]][-6:]]
 
 
-def scorecard_section(cols: list) -> list:
+def scorecard_section(cols: list[Snapshot]) -> list:
     """The scorecard table, with deltas and regression warnings (baseline against latest) when it has several
     snapshots."""
     if not cols:
-        return ["No snapshot yet: run `cleanup.py measure`."]
+        return ["No snapshot yet: run `vibecheck.py measure`."]
     delta = ["Δ"] if len(cols) >= 2 else []
     lines = md_table(["metric", *(column(s) for s in cols), *delta, "description"],
                      scorecard(cols))
@@ -191,7 +188,17 @@ def severity_rules() -> list:
     return ["", "## Severity rules", "",
             "Set where tools/__init__.py creates each tool; red flags and bugs you add keep the severity you "
             "give them.", "",
-            *(f"- **{sev.name}:** " + "; ".join(when for s, when in rows if s == sev.name) for sev in Severity)]
+            *(
+                f"- **{sev.name}:** " + "; ".join(
+                    when
+                    for s, when
+                    in rows
+                    if s == sev.name
+                )
+                for sev
+                in Severity
+            ),
+        ]
 
 
 def render_report(cleanup: Cleanup) -> str:
@@ -205,17 +212,16 @@ def render_report(cleanup: Cleanup) -> str:
 
 
 def cmd_report(a):
-    """`cleanup.py report`: render .vibecheck/report.md, and copy the scripts to .vibecheck/scripts/."""
+    """`vibecheck.py report`: render .vibecheck/report.md, and copy the scripts to .vibecheck/scripts/."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
     cleanup.save()  # refreshes the release status and the snapshot taken at HEAD
-    d = cleanup.dir
-    (d / "report.md").write_text(render_report(cleanup))
-    scripts = Path(__file__).resolve().parent  # cleanup.py, the modules it imports, tools/ and utils/
-    copy = d / "scripts"
+    (cleanup.dir / "report.md").write_text(render_report(cleanup))
+    scripts = Path(__file__).resolve().parent  # vibecheck.py, the modules it imports, tools/ and utils/
+    copy = cleanup.dir / "scripts"
     if scripts != copy.resolve():  # lets another agent re-measure without the skill
         shutil.rmtree(copy, ignore_errors=True)  # a module renamed since the last copy must not linger
         shutil.copytree(scripts, copy, ignore=shutil.ignore_patterns("__pycache__", "test_*.py", ".*"))
     counts = " · ".join(f"{len(cleanup.open_issues(s))} {s.name}" for s in Severity)
     print(f"release: {cleanup.data['release_status'].upper()}  ·  open {counts}")
-    print(f"-> {d / 'report.md'}")
+    print(f"-> {cleanup.dir / 'report.md'}")

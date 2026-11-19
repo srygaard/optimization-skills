@@ -7,9 +7,10 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 from utils.process import run
-from tools.base import Metric, Result, Step, ToolError
+from tools.base import Issue, Metric, Result, Step, ToolError
 
 
 class Ruff(Step):
@@ -18,7 +19,7 @@ class Ruff(Step):
     name = "ruff"
     package = "ruff"
     version = "0.15.7"
-    policy = {
+    policy: ClassVar[dict] = {
         "magic-function": "function or method comparing against {medium_magic}+ distinct unnamed numbers (PLR2004)",
         "magic-numbers": "function, method or module-level code comparing against fewer unnamed numbers",
         "string-paths": "paths built and opened as strings (os.path, open, glob) instead of pathlib (PTH), as one issue",
@@ -53,7 +54,8 @@ class Ruff(Step):
                 continue
             line = d["location"]["row"]
             if d["code"] == "PLR2004":
-                value = re.search(r"`([^`]+)`", d["message"]).group(1)
+                found_value = re.search(r"`([^`]+)`", d["message"])
+                value = found_value.group(1) if found_value else d["message"]
                 magic.setdefault((file, scope.qualname(file, line)), []).append((line, value))
             else:
                 paths[file] = paths.get(file, 0) + 1
@@ -69,7 +71,7 @@ class Ruff(Step):
             raise ToolError(f"ruff failed: {p.stderr.strip()[-200:]}") from None
         return [d for d in found if d.get("code")]  # a file that doesn't parse has no code
 
-    def function_issue(self, file: str, qualname: str, found: list) -> dict:
+    def function_issue(self, file: str, qualname: str, found: list) -> Issue:
         """One function's (or a module's top-level code's) comparisons against unnamed numbers: medium from
         `medium_magic` distinct numbers, low below."""
         distinct = sorted({v for _, v in found})
@@ -86,15 +88,23 @@ class Ruff(Step):
                  "every number left is plain (`ndim == 4` for a batch of images), dismiss with that note."),
             done_when="Every number left is plain, and the safety net passes.")
 
-    def paths_issue(self, paths: dict) -> dict:
+    def paths_issue(self, paths: dict) -> Issue:
         return self.count_issue("PATH", "pathlib", "string-paths", "string-paths", paths,
                                 f"{sum(paths.values())} string path calls",
                                 fix=("Build paths with pathlib (`root / \"data\" / name`) and use `.read_text()`, "
                                      "`.exists()`, `.glob()` and `.open()` in the code you touch anyway; don't "
                                      "rewrite untouched files just for this."))
 
-    def count_issue(self, prefix: str, category: str, rule: str, policy: str, per_file: dict, what: str,
-                    fix: str) -> dict:
+    def count_issue(
+        self,
+        prefix: str,
+        category: str,
+        rule: str,
+        policy: str,
+        per_file: dict,
+        what: str,
+        fix: str,
+    ) -> Issue:
         """One issue holding a count and the files with the most."""
         most = sorted(per_file.items(), key=lambda kv: (-kv[1], kv[0]))
         return self.issue(
