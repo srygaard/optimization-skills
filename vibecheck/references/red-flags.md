@@ -35,7 +35,7 @@ easier to understand, use or change. A flag on code that is about to be deleted 
 
 ## Recording a red flag
 
-Append to `issues` in `.revibe/issues.json`. Use IDs `RF-A1`, `RF-A2`, and so on; `measure` never
+Append to `issues` in `.vibecheck/issues.json`. Use IDs `RF-A1`, `RF-A2`, and so on; `measure` never
 touches issues with `"source": "agent"`.
 
 ```json

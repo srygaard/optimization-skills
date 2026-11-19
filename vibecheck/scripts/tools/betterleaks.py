@@ -54,7 +54,7 @@ class Betterleaks(Tool):
                 "set BETTERLEAKS=/path/to/betterleaks")
         cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
         version = self.version
-        cache = cache / "revibe-repo" / f"betterleaks-{version}"
+        cache = cache / "vibecheck" / f"betterleaks-{version}"
         exe = cache / "betterleaks"
         if exe.is_file():
             return exe
@@ -258,8 +258,8 @@ def head_as_commit(repo: Path, mirror: Path) -> str:
     """A root commit in the scan's mirror that holds HEAD's tree, so a scan of it reads every tracked file at HEAD
     as added, once. No ref names it, so a scan of the history never sees it."""
     tree = git(repo, "rev-parse", "HEAD^{tree}").strip()
-    who = {"GIT_AUTHOR_NAME": "revibe", "GIT_AUTHOR_EMAIL": "revibe@localhost", "GIT_COMMITTER_NAME": "revibe",
-           "GIT_COMMITTER_EMAIL": "revibe@localhost"}
+    who = {"GIT_AUTHOR_NAME": "vibecheck", "GIT_AUTHOR_EMAIL": "vibecheck@localhost", "GIT_COMMITTER_NAME": "vibecheck",
+           "GIT_COMMITTER_EMAIL": "vibecheck@localhost"}
     p = run(["git", "-C", mirror, "commit-tree", tree, "-m", "HEAD"], env={**os.environ, **who})
     if p.returncode:
         raise SystemExit(f"git commit-tree failed: {p.stderr.strip()[-200:]}")

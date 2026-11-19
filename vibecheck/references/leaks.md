@@ -95,7 +95,7 @@ lives in a temp dir that is deleted at once.
 
 `tools/betterleaks.py` pins Betterleaks 1.9.0. It downloads `betterleaks_1.9.0_<os>_<arch>.tar.gz` (darwin/linux,
 x64/arm64) from the GitHub release, refuses it unless its SHA-256 matches the pinned value, and
-caches it in `~/.cache/revibe-repo/` (or `$XDG_CACHE_HOME`).
+caches it in `~/.cache/vibecheck/` (or `$XDG_CACHE_HOME`).
 
 - **Offline:** copy the tarball over, check its SHA-256 against the script, extract it, and set
   `BETTERLEAKS=/path/to/betterleaks`.

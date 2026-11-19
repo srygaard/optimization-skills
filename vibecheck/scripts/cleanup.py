@@ -8,9 +8,9 @@
     cleanup.py leaks   REPO [--internal R] [--history]  secrets and internal refs: each commit once, and HEAD
     cleanup.py measure REPO [--label L] [--exclude G]  this commit's metrics + mechanical issues
     cleanup.py compare REPO [BASE] [--to REF]         before/after table and regression warnings
-    cleanup.py report  REPO                           render REPO/.revibe/report.md
+    cleanup.py report  REPO                           render REPO/.vibecheck/report.md
 
-Everything is written to REPO/.revibe/, which ignores itself in git: issues.json, report.md, and a folder
+Everything is written to REPO/.vibecheck/, which ignores itself in git: issues.json, report.md, and a folder
 per measured commit with its metrics.json. Secret values never reach
 stdout or any file: only a known public prefix (`ghp_`, `hf_`) and the length. Tests: test_cleanup.py.
 
@@ -23,7 +23,7 @@ sigstore-signed checksums.txt, and cached. Set BETTERLEAKS=/path/to/betterleaks 
 import argparse
 import sys
 
-sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .revibe/
+sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder and .vibecheck/
 from leaks import cmd_leaks
 from measure import cmd_measure
 from report import cmd_compare, cmd_report
@@ -47,7 +47,7 @@ def main():
     p.add_argument("repo")
     p.add_argument("base", nargs="?", help="a label, commit or git ref (default: the baseline)")
     p.add_argument("--to", help="a label, commit or git ref (default: the latest measured)")
-    p = sub.add_parser("report", help="render .revibe/report.md")
+    p = sub.add_parser("report", help="render .vibecheck/report.md")
     p.add_argument("repo")
     a = ap.parse_args()
     {"leaks": cmd_leaks, "measure": cmd_measure, "compare": cmd_compare, "report": cmd_report}[a.cmd](a)

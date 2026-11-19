@@ -369,7 +369,7 @@ def end_to_end():
 
         def at_head() -> dict:
             commit = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout
-            folders = list((repo / ".revibe").glob(f"*-{commit.strip()[:12]}"))
+            folders = list((repo / ".vibecheck").glob(f"*-{commit.strip()[:12]}"))
             return json.loads((folders[0] / "metrics.json").read_text())
 
         check(cli("measure", r).returncode != 0, "measure refuses to run before the leak scan")
@@ -378,7 +378,7 @@ def end_to_end():
         p = cli("measure", r, "--label", "baseline")
         check(p.returncode == 0, f"measure runs ({p.stderr.strip()[-200:]})")
         check("SyntaxWarning" not in p.stderr, "the repo's invalid escapes print no warnings")
-        data = json.loads((repo / ".revibe/issues.json").read_text())
+        data = json.loads((repo / ".vibecheck/issues.json").read_text())
         scanned = {i["id"] for i in data["issues"] if i["category"] in ("leak", "internal-ref")}
         history_commit = data["leak_scan"]["history"]
         by = {}
@@ -466,14 +466,14 @@ def end_to_end():
         data["issues"].append({**route, "id": "RF-A1", "source": "agent", "category": "red-flag",
                                "rule": "shallow-module", "status": "open", "note": ""})
         ids = {i["id"] for i in data["issues"]}
-        (repo / ".revibe/issues.json").write_text(json.dumps(data))
+        (repo / ".vibecheck/issues.json").write_text(json.dumps(data))
         flags = at_head()["metrics"]["red_flags_open"]
         cli("report", r)
         check(at_head()["metrics"]["red_flags_open"]
               == flags + 1, "report counts red flags added in review into the snapshot taken at HEAD")
         loc = at_head()["metrics"]["loc"]
         head_commit = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout
-        legacy = repo / ".revibe" / head_commit[:12]  # how older versions named a commit's folder
+        legacy = repo / ".vibecheck" / head_commit[:12]  # how older versions named a commit's folder
         legacy.mkdir()
         (legacy / "metrics.json").write_text(json.dumps(at_head()))
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
@@ -481,10 +481,10 @@ def end_to_end():
         (repo / "scratch.py").unlink()
         check(at_head()["metrics"]["loc"] == loc,
               "untracked files are not measured")
-        folders = [f.name for f in (repo / ".revibe").iterdir() if f.is_dir() and f.name != "scripts"]
+        folders = [f.name for f in (repo / ".vibecheck").iterdir() if f.is_dir() and f.name != "scripts"]
         check(not legacy.exists() and all(re.fullmatch(r"\d{10}-[0-9a-f]{12}", f) for f in folders),
               "metrics folders are named <commit epoch>-<commit>, and an older <commit> folder is replaced")
-        data = json.loads((repo / ".revibe/issues.json").read_text())
+        data = json.loads((repo / ".vibecheck/issues.json").read_text())
         check({i["id"] for i in data["issues"]} == ids, "IDs are stable across runs")
         check(next(i for i in data["issues"] if i["id"] == route["id"])["status"] == "dismissed",
               "agent edits survive a re-run")
@@ -512,10 +512,10 @@ def end_to_end():
         check(cli("measure", r, "--label", "after").returncode != 0, "a new commit needs a new leak scan")
         cli("leaks", r)
         cli("measure", r, "--label", "after")
-        data = json.loads((repo / ".revibe/issues.json").read_text())
+        data = json.loads((repo / ".vibecheck/issues.json").read_text())
         check(any(i["symbol"] == "unused_helper" and i["status"] == "fixed" for i in data["issues"]),
               "deleted dead code -> fixed")
-        check(len(list((repo / ".revibe").glob("*/metrics.json"))) == 2,
+        check(len(list((repo / ".vibecheck").glob("*/metrics.json"))) == 2,
               "each measured commit keeps its metrics in its own folder; re-measuring one replaces them")
         check(next(i for i in data["issues"] if i["id"] == leak["id"])["status"] == "open",
               "the repo's own .betterleaksignore doesn't hide a secret from the audit")
@@ -538,26 +538,26 @@ def end_to_end():
         p = cli("compare", r, "baseline")
         check(p.returncode == 0 and "Dead code LOC" in p.stdout, "compare prints before/after")
         p = cli("report", r)
-        report = (repo / ".revibe/report.md").read_text()
+        report = (repo / ".vibecheck/report.md").read_text()
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
         check("## Severity rules" in report and "- **critical:** credential" in report,
               "report ends with the severity rules")
-        p = subprocess.run([sys.executable, str(repo / ".revibe/scripts/cleanup.py"), "compare", r, "baseline"],
+        p = subprocess.run([sys.executable, str(repo / ".vibecheck/scripts/cleanup.py"), "compare", r, "baseline"],
                            capture_output=True, text=True)
-        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .revibe/scripts/ runs on its own")
+        check(p.returncode == 0 and "Dead code LOC" in p.stdout, "the copy report leaves in .vibecheck/scripts/ runs on its own")
         cli("leaks", r, "--history")
-        check(json.loads((repo / ".revibe/issues.json").read_text())["leak_scan"]["history"] != history_commit,
+        check(json.loads((repo / ".vibecheck/issues.json").read_text())["leak_scan"]["history"] != history_commit,
               "leaks --history reads every commit again")
         subprocess.run(["git", "-C", r, "commit", "-q", "--amend", "-m", "and remove it (amended)"], check=True)
         cli("leaks", r)
         amended = subprocess.run(["git", "-C", r, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        check(json.loads((repo / ".revibe/issues.json").read_text())["leak_scan"]["history"] == amended,
+        check(json.loads((repo / ".vibecheck/issues.json").read_text())["leak_scan"]["history"] == amended,
               "a commit read before that has left the history (amended) makes the next scan read every commit")
-        check(not any(f.name == "__pycache__" for f in (repo / ".revibe").rglob("*")) and
-              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .revibe/ or the skill folder")
-        files = [f.read_text(errors="replace") for f in (repo / ".revibe").rglob("*") if f.is_file()]
+        check(not any(f.name == "__pycache__" for f in (repo / ".vibecheck").rglob("*")) and
+              not any(CLEANUP.parent.rglob("__pycache__")), "no __pycache__ in .vibecheck/ or the skill folder")
+        files = [f.read_text(errors="replace") for f in (repo / ".vibecheck").rglob("*") if f.is_file()]
         leaked = [k for k, v in secrets.items() if any(v in t for t in files + transcript)]
-        check(not leaked, f"no plaintext secret in output or .revibe/ {leaked or ''}")
+        check(not leaked, f"no plaintext secret in output or .vibecheck/ {leaked or ''}")
 
 
 def main():

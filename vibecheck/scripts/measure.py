@@ -57,14 +57,14 @@ def run_steps(scope, steps=MEASURE) -> tuple:
 
 def cmd_measure(a):
     """`cleanup.py measure`: run every measure step, fold their issues into issues.json, and write this commit's
-    metrics to .revibe/<commit time>-<commit>/metrics.json."""
+    metrics to .vibecheck/<commit time>-<commit>/metrics.json."""
     cleanup = Cleanup(a.repo)
     cleanup.require_leak_scan()
     repo = cleanup.repo
     data = cleanup.data
     tools = tool_versions()  # fail before any step runs
     default_excludes = ("**/tests/**", "**/test/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "docs/**",
-                        ".revibe/**")
+                        ".vibecheck/**")
     excludes = list(dict.fromkeys([*default_excludes, *a.exclude]))
     with warnings.catch_warnings():
         # parsing the repo's code (an invalid escape such as "\\.") must not print warnings into the output

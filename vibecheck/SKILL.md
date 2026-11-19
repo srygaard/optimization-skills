@@ -1,5 +1,5 @@
 ---
-name: revibe-repo
+name: vibecheck
 description: >-
   Measurable, prioritized cleanup of a Python ML research repo before open-sourcing it. Use when
   preparing a lab or research codebase for public release, auditing code quality, or planning and
@@ -9,16 +9,16 @@ description: >-
   missing LICENSE or README, undeclared or vulnerable dependencies
   (deptry, pip-audit), dead code (vulture), cyclomatic complexity, duplication, code sloppiness
   metrics (verbosity, erosion, clone ratio, scb-check, SlopCodeBench), or the red flags
-  from Ousterhout's "A Philosophy of Software Design". Produces .revibe/report.md, which another
-  agent can work from, .revibe/issues.json, with every finding and its severity, and the metrics of
+  from Ousterhout's "A Philosophy of Software Design". Produces .vibecheck/report.md, which another
+  agent can work from, .vibecheck/issues.json, with every finding and its severity, and the metrics of
   each measured commit, so progress is tracked across the work.
 ---
 
-# Revibe a repo before open-sourcing
+# Vibecheck a repo before open-sourcing
 
 A router. One script measures, tracks and reports; depth lives in `references/`.
 
-**Outputs**, all in `<repo>/.revibe/` (it ignores itself in git, so nothing there is published):
+**Outputs**, all in `<repo>/.vibecheck/` (it ignores itself in git, so nothing there is published):
 - `report.md`: a self-contained work plan another agent can execute without this skill.
 - `issues.json`: every finding with its severity (critical, high, medium, low) and status. It is the
   source of truth for the issues; the report is generated from it.
@@ -48,7 +48,7 @@ S=<this skill>/scripts
 $S/cleanup.py leaks   <repo> [--internal REGEX]   # 1. secret scan of every commit (mandatory)
 $S/cleanup.py measure <repo> --label baseline      # 2. this commit's scorecard + mechanical issues
 #                                                    3. review issues.json (section 3)
-$S/cleanup.py report  <repo>                       # 4. render .revibe/report.md
+$S/cleanup.py report  <repo>                       # 4. render .vibecheck/report.md
 #                                                    5. the user picks a phase, or hands the report on
 #                                                    6. fix loop: safety net, one commit per family of fix
 $S/cleanup.py leaks <repo> && $S/cleanup.py measure <repo>   # 7. after each commit
@@ -116,7 +116,7 @@ published results (freeze or tag them).
 
 ## 3. Reviewing issues.json (step 3)
 
-Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reason, never a 1–10 score.
+Edit `.vibecheck/issues.json` directly. Each call is a yes/no decision with a reason, never a 1–10 score.
 
 - **Dead code:** vulture is guessing (60% confidence). Confirm nothing names the symbol: yaml
   `_target_`/`target:`, registries, `getattr`, notebooks, shell scripts. `measure` already dismisses
@@ -136,7 +136,7 @@ Edit `.revibe/issues.json` directly. Each call is a yes/no decision with a reaso
   design (an override like `model.train = disabled_train`), not worth it, or a rotated key that stays in
   the local history are all valid. `fixed` only sticks once the tools stop detecting the issue:
   re-measuring reopens a fixed issue they still see. Your edits
-  survive re-runs; `grep <ID> .revibe/issues.json` shows one issue per line.
+  survive re-runs; `grep <ID> .vibecheck/issues.json` shows one issue per line.
 - **Bugs found on the way** get their own issue (`"id": "BUG-A1"`, `"category": "bug"`, a `severity`
   and a `summary`; the rest is optional) and their own commit, never inside a refactor.
 - **Typos stop the script:** every command checks issues.json first and names any issue with an unknown
@@ -195,7 +195,7 @@ scan, has `scan` instead.
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
 `tools/pip_audit.py` when bumping it); ruff runs as `python -m ruff`, and deptry as `python -m deptry`, since
 deptry's API exits the process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
-unless the SHA-256 matches the pinned value, and caches it in `~/.cache/revibe-repo/`. Set
+unless the SHA-256 matches the pinned value, and caches it in `~/.cache/vibecheck/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).
 
 - `scripts/test_cleanup.py` checks the bookkeeping offline (`--offline`, a second), then
@@ -203,8 +203,8 @@ unless the SHA-256 matches the pinned value, and caches it in `~/.cache/revibe-r
   that no secret value reaches any output.
 - The shebang needs `env -S`. On old Linux (coreutils < 8.30) run `uv run --script cleanup.py ...`.
 - `report` copies `cleanup.py`, its modules, `tools/` (which holds the leak rules, `betterleaks.toml`)
-  and `utils/` into `.revibe/scripts/`, so another agent can re-measure with
-  `.revibe/scripts/cleanup.py` without this skill.
+  and `utils/` into `.vibecheck/scripts/`, so another agent can re-measure with
+  `.vibecheck/scripts/cleanup.py` without this skill.
 - Coverage is optional and never required, because it usually means running a real training job. If a
   `coverage.json` (coverage.py JSON report) sits at the repo root, dead-code candidates whose bodies ran
   are dismissed (def lines run on import, so they don't count).

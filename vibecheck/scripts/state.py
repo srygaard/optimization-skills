@@ -1,4 +1,4 @@
-"""REPO/.revibe/: issues.json, the single source of truth for the issues and the leak scan, and one folder per
+"""REPO/.vibecheck/: issues.json, the single source of truth for the issues and the leak scan, and one folder per
 measured commit (`<commit time>-<commit>`), whose metrics.json tracks the scorecard across the work. Every command opens it as a `Cleanup`;
 report.md is generated from both."""
 
@@ -28,11 +28,11 @@ def now() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
-# --- .revibe/ --------------------------------------------------------------------------------------
+# --- .vibecheck/ --------------------------------------------------------------------------------------
 
 
 class Cleanup:
-    """A repo's .revibe/ folder: its issues.json, loaded and checked, and the metrics of each measured commit."""
+    """A repo's .vibecheck/ folder: its issues.json, loaded and checked, and the metrics of each measured commit."""
 
     # the scorecard rows count_issues sets, after the measure steps' own
     metrics = (
@@ -43,7 +43,7 @@ class Cleanup:
     def __init__(self, path: str):
         self.repo = repo_root(path)
         self.commit = head(self.repo)
-        self.dir = self.repo / ".revibe"
+        self.dir = self.repo / ".vibecheck"
         self.dir.mkdir(exist_ok=True)
         if not (self.dir / ".gitignore").exists():
             (self.dir / ".gitignore").write_text("*\n")
@@ -148,7 +148,7 @@ def load_issues(path: Path) -> dict:
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
-        raise SystemExit(f"{path} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .revibe/ is not in "
+        raise SystemExit(f"{path} is not valid JSON (line {e.lineno}: {e.msg}). Fix it by hand; .vibecheck/ is not in "
             "git, so there is no older copy")
     if not isinstance(data, dict) or not isinstance(data.setdefault("issues", []), list):
         raise SystemExit(f"{path} must be an object with an \"issues\" list")
