@@ -11,6 +11,8 @@ description: >-
   tensorboard_trace_handler; when reading a .pt.trace.json without
   chrome://tracing; when attributing GPU time under torch.compile; or when a
   fix that looked large in a trace didn't move throughput.
+metadata:
+  version: 1.0.0
 ---
 
 # PyTorch profiler: where to spend optimization effort

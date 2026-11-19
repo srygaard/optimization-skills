@@ -11,6 +11,8 @@ description: >-
   or are staged to $SLURM_TMPDIR; when data outgrows page cache or local disk; for
   chunk shuffling or shuffle buffers; when scaling to more nodes or faster
   GPUs; or when one DDP rank waits on another's late batch.
+metadata:
+  version: 1.0.0
 ---
 
 # PyTorch DataLoader: stop starving the GPU
