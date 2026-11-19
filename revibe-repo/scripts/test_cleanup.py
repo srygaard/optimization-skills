@@ -28,7 +28,7 @@ import measure
 import scope
 import state
 import tools
-from tools import vulture
+from tools import deptry, vulture
 from tools.base import Result, Step
 
 CLEANUP = Path(__file__).resolve().parent / "cleanup.py"
@@ -127,6 +127,37 @@ def offline():
     check(all((bool(named), bool(mentioned)) == (want_named, want_mention)
               for (named, mentioned), (_, _, _, want_named, want_mention) in zip(results, cases)),
           "only module-qualified references dismiss dead code; bare `.train` or \"train\" is a mention")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "pyproject.toml").write_text('[tool.deptry.package_module_name_map]\nattrs = "attrs"\n'
+                                               'my-pkg = ["one", "two"]\n')
+        entries = dict(pair.split("=", 1) for pair in deptry.deptry_name_map(Path(tmp)).split(","))
+        check(entries["flash-attn-4"] == "flash_attn" and entries["attrs"] == "attrs"
+              and entries["my-pkg"] == "one|two" and entries["pyyaml"] == "yaml",
+              "the repo's own package_module_name_map is merged into the built-in one and wins, instead of "
+              "the command line replacing it")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "pyproject.toml").write_text('[project]\nname = "demo"\ndependencies = ["torch", "pyyaml"]\n')
+        files = ["figures/plot_a.py", "figures/plot_b.py", "src/trainers/torch.py", "src/pkg/__init__.py"]
+        for f in files:
+            Path(tmp, f).parent.mkdir(parents=True, exist_ok=True)
+            Path(tmp, f).write_text("")
+        first_party = deptry.deptry_first_party(scope.Scope(Path(tmp), files))
+        check("plot_b" in first_party and "pkg" in first_party and "torch" not in first_party
+              and "yaml" not in first_party,
+              "a flat folder's sibling scripts are first-party, but a local torch.py can't hide an undeclared torch")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "pyproject.toml").write_text(
+            '[project]\nname = "demo"\ndependencies = ["torch"]\n\n[project.optional-dependencies]\n'
+            'dev = ["black", "torch"]\nevaluate = ["peft"]\nall = ["demo[dev]"]\n\n'
+            '[dependency-groups]\nlint = ["ruff"]\n')
+        exempt = deptry.unused_exempt(Path(tmp))
+        check("black" in exempt and "ruff" in exempt and "demo" in exempt
+              and "peft" not in exempt and "torch" not in exempt,
+              "a dev extra, a dependency group and the project itself are never 'unused'; a real extra, and a "
+              "package that is also a runtime dependency, still are")
 
     with tempfile.TemporaryDirectory() as tmp:
         none = created["deptry"].measure(scope.Scope(Path(tmp), []))
