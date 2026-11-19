@@ -87,7 +87,7 @@ def comparison_warnings(base: Snapshot, after: Snapshot) -> Iterator[str]:
 # --- report ----------------------------------------------------------------------------------------
 
 HOW_TO = """\
-1. Work in phase order: High, then Medium, then Low (critical and high issues are the High phase). Bigger items come first within a category.
+1. Work in phase order: Critical, then High, then Medium, then Low. Bigger items come first within a category.
 2. Critical leaks: the user must revoke/rotate the key first. Never print, echo or `cat` a secret; the previews here are enough.
 3. Safety net before refactoring, in its own commit under `tests/` (outside the metrics): a test that imports every module, `--help` for each entry point, and a characterization test (small synthetic inputs, pinned output) for each function you change that is somewhat complex (roughly CC above 5) or has side effects (files, global state, randomness, devices); a short or simple pure function needs none, since the import test and its callers' tests cover it. The tests must run in the project's real environment; if it isn't available (e.g. no torch, no GPU), ask the user before refactoring, and don't commit stubs.
 4. One commit per family of fix, the issues one kind of change closes (delete the dead code, replace the internal paths, name the magic thresholds; a refactor of one complex function is a family of its own), with a Conventional Commits message (`refactor:`, `fix:`, `test:`, `chore:`, `docs:`) and a `Cleanup-Issue: <ID>` footer for each issue it closes. Run the safety net after each commit. Delete dead code before refactoring: issues marked "Inside dead-code candidate" go away with it.
@@ -118,7 +118,7 @@ def report_header(cleanup: Cleanup) -> list:
     reason = "" if cleanup.leak_scan_current() else " (the leak scan is not current: run `leaks` again)"
     critical = len(cleanup.open_issues(Severity.critical))
     high = len(cleanup.open_issues(Severity.high))
-    blocking = (f" · {critical} critical and {high} high issues open: the High phase is what blocks the release"
+    blocking = (f" · {critical} critical and {high} high issues open: the Critical and High phases block the release"
                 if critical or high else "")
     return [f"# Cleanup report: {cleanup.repo.name}", "",
             f"Commit `{data['commit'][:8]}` · generated {data['generated'][:10]} · "
@@ -162,24 +162,11 @@ def phase_section(phase: str, items: list) -> list:
     prev = {}
     for i in items:
         same = {k: "same as above" if i[k] and i[k] == prev.get(k) else i[k] for k in ("fix", "done_when")}
-        rows.append([i["id"], i["severity"], where(i), i["summary"], same["fix"],
+        rows.append([i["id"], where(i), i["summary"], same["fix"],
                      *([same["done_when"]] if done else []), i["effort"]])
         prev = i
-    return lines + md_table(["ID", "severity", "where", "problem", "fix", *(["done when"] if done else []), "effort"],
+    return lines + md_table(["ID", "where", "problem", "fix", *(["done when"] if done else []), "effort"],
                             rows)
-
-
-def dismissed_section(data: dict) -> list:
-    """Dismissed issues with their reasons, then how many are fixed."""
-    dismissed = [i for i in data["issues"] if i["status"] == "dismissed"]
-    fixed = sum(i["status"] == "fixed" for i in data["issues"])
-    lines = ["", f"## Dismissed ({len(dismissed)})", ""]
-    if dismissed:
-        lines += md_table(["ID", "where", "problem", "reason"],
-                          [[i["id"], where(i), i["summary"], i["note"]] for i in dismissed])
-    else:
-        lines.append("None.")
-    return lines + ["", f"Fixed so far: {fixed} issue(s)."]
 
 
 def severity_rules() -> list:
@@ -202,12 +189,11 @@ def severity_rules() -> list:
 
 
 def render_report(cleanup: Cleanup) -> str:
-    """report.md: the header, the scorecard, a table per phase, the dismissed issues and the severity rules."""
-    phases = (("High", (Severity.critical, Severity.high)), ("Medium", (Severity.medium,)), ("Low", (Severity.low,)))
+    """report.md: the header, the scorecard, a table per phase and the severity rules."""
     lines = report_header(cleanup) + scorecard_section(report_columns(cleanup))
-    for phase, severities in phases:
-        lines += phase_section(phase, cleanup.open_issues(*severities))
-    lines += dismissed_section(cleanup.data) + severity_rules()
+    for severity in Severity:
+        lines += phase_section(severity.name.capitalize(), cleanup.open_issues(severity))
+    lines += severity_rules()
     return "\n".join(lines) + "\n"
 
 

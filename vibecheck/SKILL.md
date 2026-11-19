@@ -109,7 +109,7 @@ kind covers. Every report.md ends with them, so an agent working from the report
 **Release status** is **blocked** while any critical or high issue is open, or while the leak scan is
 older than HEAD.
 
-**High phase checklist:** the user rotates leaked keys, then remove them from HEAD and decide on history
+**Critical and High phase checklist:** the user rotates leaked keys, then remove them from HEAD and decide on history
 (a fresh, squashed history is recommended: [leaks.md](references/leaks.md)) · delete what shouldn't ship
 · add the safety net · add a LICENSE if missing (the user picks it) · bump vulnerable pins · check the
 README quickstart works from a fresh checkout.
