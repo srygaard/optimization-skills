@@ -12,6 +12,8 @@ description: >-
   time under torch.compile or on ROCm; when gradient accumulation still
   all-reduces every micro-batch; or when a fix that looked large in a trace
   didn't move throughput.
+metadata:
+  version: 1.0.0
 ---
 
 # PyTorch profiler: where the step goes

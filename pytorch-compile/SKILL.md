@@ -12,6 +12,8 @@ description: >-
   torch.compiler.disable, or "accessing tensor output of CUDAGraphs". Also for
   profiling a compiled model (kernels are fused and invisible to module hooks)
   and for measurement hygiene when benchmarking compiled vs eager.
+metadata:
+  version: 1.0.0
 ---
 
 # torch.compile diagnostics
