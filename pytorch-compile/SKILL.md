@@ -10,10 +10,13 @@ description: >-
   autotune, max-autotune, coordinate_descent_tuning, specialize_float, CUDA
   graphs / reduce-overhead, cudagraph_mark_step_begin, allow_in_graph,
   torch.compiler.disable, or "accessing tensor output of CUDAGraphs". Also for
-  profiling a compiled model (kernels are fused and invisible to module hooks)
-  and for measurement hygiene when benchmarking compiled vs eager.
+  reusing compiled artifacts across jobs or nodes — megacache / Mega-Cache,
+  save_cache_artifacts, load_cache_artifacts, cold vs warm compile,
+  TORCHINDUCTOR_CACHE_DIR — for profiling a compiled model (kernels are fused and
+  invisible to module hooks), and for measurement hygiene when benchmarking
+  compiled vs eager.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # torch.compile diagnostics
@@ -208,7 +211,8 @@ larger one. Re-measure on yours.
 
 ## 8. Scripts
 
-Stdlib only, no install step.
+`log_triage.py` and `trace_summary.py` are stdlib only, no install step; the other
+two import torch and run inside your training process.
 
 ```bash
 python3 scripts/log_triage.py run.err            # breaks by reason, recompiles by guard,
@@ -221,6 +225,10 @@ python3 scripts/compile_watch.py --selftest      # imports torch; also a known-g
 `compile_watch.py` also exposes `CompileWatch()` for in-process **per-step**
 compile-phase deltas — cumulative totals stop being informative by the sixth
 distinct shape.
+
+`megacache.py` is a library, not a command: copy it into your trainer to share
+compiled artifacts across jobs and nodes. See
+[compile-time.md](references/compile-time.md) §7 for the keying rules and the traps.
 
 ---
 
@@ -241,7 +249,7 @@ Full versions with the incident behind each: [measurement.md](references/measure
 |---|---|
 | [graph-breaks.md](references/graph-breaks.md) | finding, counting, and deciding whether to fix breaks |
 | [recompiles.md](references/recompiles.md) | you have guard text, or shapes vary |
-| [compile-time.md](references/compile-time.md) | one compile is enormous |
+| [compile-time.md](references/compile-time.md) | one compile is enormous, or you want to reuse compiles across jobs |
 | [mode-selection.md](references/mode-selection.md) | choosing a mode, CUDA-graph errors, config levers |
 | [measurement.md](references/measurement.md) | before trusting any number |
 | [fix-patterns.md](references/fix-patterns.md) | the before/after catalogue, cited by ID everywhere |
