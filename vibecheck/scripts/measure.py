@@ -1,5 +1,6 @@
 """`vibecheck.py measure`: run the tools, merge their issues, record the metrics of this commit."""
 
+import json
 import sys
 import warnings
 from importlib.metadata import PackageNotFoundError, version
@@ -72,7 +73,10 @@ def cmd_measure(a):
         scope = Scope(repo, shipped_files(repo, excludes))
         found, metrics, not_measured, measured = run_steps(scope)
     dirty = bool(git(repo, "status", "--porcelain", "--untracked-files=no").strip())
-    snap: Snapshot = {"label": a.label, "date": now(), "commit": cleanup.commit, "dirty": dirty,
+    earlier = cleanup.snapshot_path(cleanup.commit)
+    # a re-run without --label keeps the label the commit was measured with
+    label = a.label or (json.loads(earlier.read_text()).get("label", "") if earlier.exists() else "")
+    snap: Snapshot = {"label": label, "date": now(), "commit": cleanup.commit, "dirty": dirty,
                       "scope": excludes, "tools": tools, "files": len(scope.files), "metrics": {},
                       "not_measured": {}, "open_issues": {}, "release_status": ""}
     snap["metrics"].update(metrics)
@@ -90,7 +94,7 @@ def cmd_measure(a):
             i["note"] = f"no longer checked: {why}"
     merge(data, found, measured)
     data["tools"].update(tools)
-    if cleanup.snapshot_path(cleanup.commit).exists():
+    if earlier.exists():
         print(f"note: replacing the metrics of {cleanup.commit[:8]}, measured before", file=sys.stderr)
     path = cleanup.write_snapshot(snap)
     cleanup.save()

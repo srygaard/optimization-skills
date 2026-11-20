@@ -11,6 +11,8 @@ class License(Step):
     """A LICENSE file and a README at the repo root."""
 
     name = "license"
+    # LICENSE.md, LICENSE-MIT, COPYING.LESSER, UNLICENSE, or a LICENSES/ folder as REUSE lays it out
+    LICENSE = r"(?i)(?:(?:un)?licen[cs]es?|copying)(?:[.-]\w+)*"
     policy: ClassVar[dict] = {
         "license-missing": "no LICENSE file: nobody may use the code",
         "readme-missing": "no README",
@@ -20,7 +22,7 @@ class License(Step):
         """An issue for a missing LICENSE file, and one for a missing README, at the repo root."""
         names = git(scope.repo, "ls-tree", "--name-only", "HEAD").splitlines()
         out = []
-        if not any(re.fullmatch(r"(?i)(?:licen[cs]e|copying)(?:\.(?:md|txt|rst))?", n) for n in names):
+        if not any(re.fullmatch(self.LICENSE, n) for n in names):
             out.append(self.issue(
                 "LIC", "license", "missing-license", "license-missing",
                 "No LICENSE file: without one, nobody may legally use, copy or modify the code",

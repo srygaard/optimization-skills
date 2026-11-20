@@ -139,8 +139,9 @@ class Betterleaks(Tool):
         before: it comes back as history-only rather than fixed. `left` is drained as it goes, so the leftovers
         come last and the caller must consume it in order."""
         left = {k["id"]: k for k in known if k["status"] != "fixed"}
+        by_id = {i["id"]: left.pop(i["id"]) for i in found if i["id"] in left}  # before a fingerprint can claim them
         for i in found:
-            k = take(left, i)
+            k = by_id.get(i["id"]) or take(left, i)
             if k and full:
                 yield {**i, "id": k["id"]}  # type: ignore[typeddict-item]  # a copy of an Issue is one
             elif k:
@@ -372,11 +373,10 @@ def place(g: dict, f: dict):
 
 
 def take(left: dict, found: dict) -> dict | None:
-    """The known issue that `found` is, taken out of `left` (the known issues by ID): the one with its ID, else
-    the first with a fingerprint in common."""
+    """The known issue that `found` is, taken out of `left` (the known issues by ID): the first with a fingerprint
+    in common."""
     prints = set(found["evidence"]["fingerprints"])
-    k = left.get(found["id"]) or next(
-        (k for k in left.values() if prints.intersection(k["evidence"].get("fingerprints", []))), None)
+    k = next((k for k in left.values() if prints.intersection(k["evidence"].get("fingerprints", []))), None)
     if k:
         del left[k["id"]]
     return k

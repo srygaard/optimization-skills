@@ -17,6 +17,8 @@ import urllib.request
 from pathlib import Path
 from typing import ClassVar, NamedTuple
 
+from packaging.version import Version
+
 from utils.process import run
 from tools.base import Issue, Metric, Result, Step, ToolError
 
@@ -258,9 +260,17 @@ class PipAudit(Step):
 
     def vuln_issue(self, name: str, version: str, vulns: list, label: str, feed: Osv) -> Issue:
         """A vulnerable dependency: the worst advisory rating sets the severity, and the target is the lowest
-        release that fixes all of its known vulnerabilities."""
+        release that fixes all of its fixable vulnerabilities."""
         by_id = {v.id: v for v in vulns}
-        fixed = [min(v.fix_versions) for v in by_id.values() if v.fix_versions]
+        installed = Version(version)
+        # an advisory lists a fix per release line: only one above the installed release fixes it
+        fixes = {
+            ident: min((f for f in v.fix_versions if f > installed), default=None)
+            for ident, v
+            in by_id.items()
+        }
+        unfixed = sorted(ident for ident, f in fixes.items() if f is None)
+        fixed = [f for f in fixes.values() if f is not None]
         target = str(max(fixed)) if fixed else None
         ids = sorted(by_id)
         held = feed.by_id(name, version)
@@ -296,9 +306,11 @@ class PipAudit(Step):
                 basis = f"CVSS >= {worst}" if worst_id in floors else f"CVSS {worst}"
                 summary += f", worst rated {band} ({basis}, {worst_id})"
             summary += f"; fixed in {target}" if target else "; no fix yet"
+            rest = f" other than {', '.join(unfixed)}, which no release fixes yet" if target and unfixed else ""
+            summary += rest
             fix = (f"Bump {name} to >= {target} in the dependency spec, then run the safety net."
                    if target else "No fixed release yet: note it, or drop the dependency if it is easy.")
-            done_when = f"pip-audit reports no vulnerabilities for {name}."
+            done_when = f"pip-audit reports no vulnerabilities for {name}{rest}."
         return self.issue(
             "VULN", "vulnerable-dependency", "pip-audit", policy, summary,
             key=f"VULN|{name.lower()}", file=label, symbol=name,
@@ -336,7 +348,8 @@ class PipAudit(Step):
         notes = None
         if feed.unreachable:
             notes = {"vuln_ratings": f"OSV did not answer for {len(feed.unreachable)} of {len(out)} vulnerable "
-                                     f"dependencies ({feed.unreachable[0]}): those stay unrated, at high"}
+                                     f"dependencies ({feed.unreachable[0]}): those stay unrated, at high if a fix "
+                                     "exists"}
         return Result(out, {"pip_audit_source": pinned.label, "vulnerable_deps": len(out)}, notes=notes)
 
 
@@ -361,12 +374,15 @@ def audit_source(repo: Path, tmp: Path) -> PinnedSource:
     long as installing them."""
     from pip_audit._dependency_source import PipSource, PyLockSource, RequirementSource
 
-    if (repo / "uv.lock").exists() and (uv := shutil.which("uv")):
+    if (repo / "uv.lock").exists():
+        if not (uv := shutil.which("uv")):
+            raise ToolError("uv.lock needs uv, which is not on PATH")
         req = tmp / "requirements.txt"
         p = run([uv, "export", "--project", repo, "--frozen", "--format", "requirements.txt",
                  "--no-emit-project", "--quiet", "-o", req])
-        if p.returncode == 0:
-            return PinnedSource(RequirementSource([req], require_hashes=True, disable_pip=True), "uv.lock")
+        if p.returncode:
+            raise ToolError(f"uv export failed: {p.stderr.strip()[-200:]}")
+        return PinnedSource(RequirementSource([req], require_hashes=True, disable_pip=True), "uv.lock")
     if pylocks := sorted(repo.glob("pylock*.toml")):
         return PinnedSource(PyLockSource(pylocks), "pylock.toml")
     for req in [repo / "requirements.txt", *sorted(repo.glob("requirements*.txt"))]:

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["packaging"]
 # ///
 """Tests for vibecheck.py: offline checks of its parsing and bookkeeping, then an end-to-end run.
 
@@ -24,12 +24,14 @@ import tempfile
 from pathlib import Path
 from typing import ClassVar
 
+from packaging.version import Version
+
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folder
 import measure
 import scope
 import state
 import tools
-from tools import deptry, pip_audit, vulture
+from tools import deptry, license, pip_audit, vulture
 from tools.base import Result, Step
 
 VIBECHECK = Path(__file__).resolve().parent / "vibecheck.py"
@@ -112,7 +114,7 @@ def offline():
         def __init__(self, ident, aliases=(), fix_versions=()):
             self.id = ident
             self.aliases = set(aliases)
-            self.fix_versions = list(fix_versions)
+            self.fix_versions = [Version(v) for v in fix_versions]
 
     v4_only = StubOsv([{
         "id": "GHSA-stub", "aliases": ["PYSEC-stub", "CVE-stub"],
@@ -130,6 +132,11 @@ def offline():
     unfixed = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-stub")], "requirements.txt", v4_only)
     check(unfixed["severity"] == "low" and unfixed["summary"].endswith("no fix yet"),
           "a vulnerability without a fixed release is low whatever it is rated")
+    lines = audit.vuln_issue("pkg", "2.0.0", [FakeVuln("PYSEC-a", (), ["1.2.5", "2.0.1"]), FakeVuln("PYSEC-b", (), ["1.3"])],
+                             "requirements.txt", StubOsv([]))
+    check(lines["evidence"]["fix_to"] == "2.0.1" and "other than PYSEC-b" in lines["summary"],
+          "the target is the lowest fix above the installed release, and an advisory fixed only on an older line is named "
+          "as unfixed")
     dead = pip_audit.Osv(endpoint=REFUSED)
     check(dead.by_id("pkg", "1.0") == {} and not dead.answered and len(dead.unreachable) == 1
           and dead.unreachable[0].startswith("pkg 1.0: ") and "refused" in dead.unreachable[0].lower(),
@@ -167,6 +174,19 @@ def offline():
     check(">=" not in scored["summary"] and "CVSS 9.8" in scored["summary"]
           and scored["evidence"]["cvss_is_floor"] == [],
           "a score computed from a CVSS v3 vector is shown as is, even when a severity word agrees")
+
+    check(all(re.fullmatch(license.License.LICENSE, n)
+              for n in ("LICENSE", "license.md", "LICENSE-MIT", "LICENSE.APACHE.txt", "COPYING.LESSER", "UNLICENSE", "LICENSES")),
+          "a license file per license, the GNU and Unlicense names, and a LICENSES/ folder all count as a license")
+
+    def leak(ident, prints):
+        return {"id": ident, "status": "open", "evidence": {"fingerprints": prints}}
+
+    same_line = ["c1:a.py:generic-api-key:3"]  # two secrets on one line share a fingerprint
+    carried = created["betterleaks"].carry_over([leak("LEAK|new", same_line), leak("LEAK|old", same_line)],
+                                                [leak("LEAK|old", same_line)], full=True)
+    check(sorted(i["id"] for i in carried) == ["LEAK|new", "LEAK|old"],
+          "a known leak keeps its ID on a full rescan, rather than a finding sharing its fingerprint taking it")
 
     def cx(symbol, policy="complex", **kw):
         return created["scb-check"].issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
@@ -593,10 +613,11 @@ def end_to_end():
         legacy.mkdir()
         (legacy / "metrics.json").write_text(json.dumps(at_head()))
         (repo / "scratch.py").write_text("def scratch(x):\n" + "    x += 1\n" * 40 + "    return x\n")  # untracked
-        cli("measure", r, "--label", "baseline")
+        cli("measure", r)
         (repo / "scratch.py").unlink()
         check(at_head()["metrics"]["loc"] == loc,
               "untracked files are not measured")
+        check(at_head()["label"] == "baseline", "re-measuring a commit without --label keeps its label")
         folders = [f.name for f in (repo / ".vibecheck").iterdir() if f.is_dir() and f.name != "scripts"]
         check(not legacy.exists() and all(re.fullmatch(r"\d{10}-[0-9a-f]{12}", f) for f in folders),
               "metrics folders are named <commit epoch>-<commit>, and an older <commit> folder is replaced")

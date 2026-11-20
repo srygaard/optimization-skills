@@ -8,17 +8,18 @@ from utils.git import git, head
 
 
 def print_leaks(repo: Path, data: dict, found: list, scanners: str):
-    """Counts by severity, then the first 15 issues as issues.json now has them. `scanners` names the tools
+    """Open issues by severity, then the first 15 issues, as issues.json now has them. `scanners` names the tools
     and their versions."""
+    ids = {i["id"] for i in found}
+    listed = [i for i in data["issues"] if i["id"] in ids]
     counts = " · ".join(
         f"{n} {s.name}"
         for s
         in Severity
-        if (n := sum(i["severity"] == s.name for i in found))
+        if (n := sum(i["severity"] == s.name and i["status"] == "open" for i in listed))
     )
-    print(f"leaks @ {head(repo)[:8]}  {scanners}  {counts or 'nothing found'}")
-    ids = {i["id"] for i in found}
-    for i in [i for i in data["issues"] if i["id"] in ids][:15]:
+    print(f"leaks @ {head(repo)[:8]}  {scanners}  {counts or 'nothing open'}")
+    for i in listed[:15]:
         print(f"  {i['id']}  {i['severity']:<8} {i['status']:<9} {i['summary'][:90]}")
     if len(found) > 15:
         print(f"  ... {len(found) - 15} more in .vibecheck/issues.json")

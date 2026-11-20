@@ -30,8 +30,8 @@ class Deptry(Step):
         "deps-unused": "declared dependency that is never imported, the project itself and dev-only tooling aside",
     }
     metrics = (Metric("deps_missing", "Dependency problems",
-                      description="imports in the code in scope (tests aside) not declared as dependencies, and "
-                                  "declared ones it never imports"),)
+                      description="imports in the code in scope (tests aside) not declared as dependencies, "
+                                  "or declared only as dev ones"),)
 
     def no_dependency_list(self, repo: Path) -> Issue:
         """No pyproject.toml dependencies or requirements.txt at the repo root. A list anywhere else (setup.py,
