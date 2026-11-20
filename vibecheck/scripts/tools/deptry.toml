@@ -1,0 +1,34 @@
+# Settings for the deptry step, in deptry's own config format.
+#
+# package_module_name_map: packages whose import name deptry can't guess when they aren't installed where it runs.
+# It falls back to the distribution name, so `flash-attn-4` becomes `flash_attn_4`, the real `flash_attn` import
+# looks undeclared (high) and the package itself looks unused (low). Add a line to fix that for every repo; a repo
+# fixes it for itself under [tool.deptry] package_module_name_map in its pyproject.toml, which wins over a line here.
+# A package that provides several top-level modules lists them: foo-python = ["foo", "bar"].
+
+# dev_extras: the [project.optional-dependencies] extras that hold tooling rather than code the project imports.
+# A package declared only in one of these is never reported unused: tests are out of scope, and a linter, formatter,
+# docs builder or pytest plugin is run as a command and imported by nothing, so deptry calls them all unused.
+# PEP 735 [dependency-groups] are treated the same way, whatever they are named.
+dev_extras = ["dev", "develop", "development", "test", "tests", "testing", "doc", "docs", "lint", "linting",
+              "typing", "type", "style", "format", "qa", "ci", "build", "bench", "benchmark"]
+
+[package_module_name_map]
+"scikit-learn" = "sklearn"
+"scikit-image" = "skimage"
+"pillow" = "PIL"
+"opencv-python" = "cv2"
+"opencv-python-headless" = "cv2"
+"pyyaml" = "yaml"
+"hydra-core" = "hydra"
+"pytorch-lightning" = "pytorch_lightning"
+"beautifulsoup4" = "bs4"
+"protobuf" = "google.protobuf"
+"huggingface-hub" = "huggingface_hub"
+"faiss-cpu" = "faiss"
+"faiss-gpu" = "faiss"
+"python-dateutil" = "dateutil"
+"attrs" = "attr"
+"tensorboardx" = "tensorboardX"
+"ftfy" = "ftfy"
+"flash-attn-4" = "flash_attn"
