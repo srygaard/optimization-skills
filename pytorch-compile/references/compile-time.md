@@ -171,11 +171,10 @@ a block-size change altered your results, look elsewhere.
 
 ## 7. Reusing compiles across runs
 
-The local Inductor/FX caches are automatic and **node-local**, so every job on a
-new node starts cold. Mega-Cache is the portable alternative — one blob, moved
-between jobs and nodes. Per the PyTorch docs it covers PGO, AOTAutograd,
-Inductor, Triton and autotuning, and is validated against the same PyTorch and
-Triton version and, on CUDA, the same GPU. Beta since 2.7.
+The local Inductor/FX caches are **node-local**, so every job on a new node
+starts cold. Mega-Cache packs them into one portable blob: PGO, AOTAutograd,
+Inductor, Triton and autotuning, valid only for the same PyTorch and Triton
+version and, on CUDA, the same GPU. Beta since 2.7.
 
 ```bash
 TORCHINDUCTOR_FX_GRAPH_CACHE=1
@@ -217,12 +216,10 @@ state is unchanged either way — warmth buys compile time only.
   a saving on *every* run, not just cold ones.
 - **Writing back the same byte count you read** confirms nothing new compiled; a
   larger write means a shape or guard changed. Loaded artifacts are carried into
-  the save, so a short run cannot strand the other shapes' entries — a 2-step run
-  touching 1 of 6 shapes still wrote 228,555,798 B against 228,576,361 B loaded.
+  the save, so a run touching only some shapes cannot strand the others' entries.
 - **Recompiles poison the blob.** Artifacts keyed on a graph that guards a lazily
   grown buffer ([RC-3](fix-patterns.md#rc-3--pre-warm-lazily-grown-internal-buffers))
-  can never be reused; one job spent 105 minutes compiling and was killed before
-  it ever saved. Fix recompiles before investing in a cross-job cache.
+  can never be reused. Fix recompiles before investing in a cross-job cache.
 - **Warm step 1 is no longer mostly compile.** Once compile time falls, input
   pipeline startup can be 17% of it. Subtract that before comparing.
 - **Budget for size.** Blobs ran 97 MB – 708 MB: shared-FS quota, and a load cost
