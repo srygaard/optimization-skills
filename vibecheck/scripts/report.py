@@ -3,6 +3,7 @@
 import shutil
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from urllib.parse import quote
 
 from state import Cleanup, Severity, Snapshot
 from tools import policies, scorecard_metrics
@@ -106,9 +107,17 @@ def md_table(header: list, rows: Iterable) -> list:
 
 
 def where(i: dict) -> str:
-    loc = f"{i['file']}:{i['line']}" if i.get("file") and i.get("line") else i.get("file") or ""
+    """The issue's file and line as a link that opens the code (report.md sits in .vibecheck/, so links start at
+    ../, and `#L<line>` jumps to the line in editors and on GitHub), then its symbol."""
     sym = i.get("symbol") or ""
-    return f"`{loc}`" + (f" ({sym})" if sym and sym != "<module>" and len(sym) < 60 else "") if loc else sym
+    label = sym if sym and sym != "<module>" and len(sym) < 60 else ""
+    file = i.get("file")
+    if not file:
+        return sym
+    line = i.get("line")
+    loc = f"{file}:{line}" if line else file
+    target = "../" + quote(file) + (f"#L{line}" if line else "")
+    return f"[`{loc}`]({target})" + (f" ({label})" if label else "")
 
 
 def report_header(cleanup: Cleanup) -> list:
@@ -153,20 +162,17 @@ def scorecard_section(cols: list[Snapshot]) -> list:
 
 
 def phase_section(phase: str, items: list) -> list:
-    """A phase's open issues as a table; a fix or done-when equal to the row above reads "same as above"."""
+    """A phase's open issues as a table; a fix equal to the row above reads "same as above"."""
     lines = ["", f"## {phase} phase ({len(items)} open)", ""]
     if not items:
         return lines + ["Nothing open."]
-    done = phase != "Low"  # Low issues are optional: no done-when column
     rows = []
     prev = {}
     for i in items:
-        same = {k: "same as above" if i[k] and i[k] == prev.get(k) else i[k] for k in ("fix", "done_when")}
-        rows.append([i["id"], where(i), i["summary"], same["fix"],
-                     *([same["done_when"]] if done else []), i["effort"]])
+        fix = "same as above" if i["fix"] and i["fix"] == prev.get("fix") else i["fix"]
+        rows.append([i["id"], where(i), i["summary"], fix, i["effort"]])
         prev = i
-    return lines + md_table(["ID", "where", "problem", "fix", *(["done when"] if done else []), "effort"],
-                            rows)
+    return lines + md_table(["ID", "where", "problem", "fix", "effort"], rows)
 
 
 def severity_rules() -> list:

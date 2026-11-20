@@ -22,6 +22,7 @@ from tools.vulture import Vulture
 MEASURE: tuple[Step, ...] = (
     ScbCheck(
         severity={
+            "complex-large": "high",
             "complex": "medium",
             "repetition": "medium",
             "wrapper": "medium",
@@ -29,7 +30,8 @@ MEASURE: tuple[Step, ...] = (
             "repetition-small": "low"
         },
         settings={
-            "medium_mass": 100,  # complexity mass CC x sqrt(SLOC) from which a function is medium
+            "high_mass": 400,  # complexity mass CC x sqrt(SLOC) from which a function is high
+            "medium_mass": 150,  # and from which it is medium
             "medium_dup_lines": 20,  # duplicate-group weight lines x (copies - 1) from which it is medium
             "min_clone_lines": 10,  # smaller duplicate blocks still count in Clone Ratio but get no issue
         },

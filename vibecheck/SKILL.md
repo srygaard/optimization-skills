@@ -83,7 +83,7 @@ Work the phases in order: critical, high, medium, low.
 | severity | meaning | for example |
 |---|---|---|
 | **critical** | can't be undone once published, or exposes everyone who installs it | credentials in history, malicious dependency |
-| **high** | fix before publishing | internal paths, big files, large dead code, no LICENSE |
+| **high** | fix before publishing | internal paths, big files, large dead code, very complex functions, no LICENSE |
 | **medium** | the biggest quality wins | complex functions, duplicates, red flags you add |
 | **low** | optional | small dead code, globals, string paths |
 

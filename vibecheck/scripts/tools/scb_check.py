@@ -24,7 +24,8 @@ class ScbCheck(Step):
     version = "0.2.0"
     # scb-check 0.2.0 lists the functions with CC > 10, and Erosion is the share of mass in them: that 10 is its own
     policy: ClassVar[dict] = {
-        "complex": "function with CC > 10 and CC x sqrt(SLOC) >= {medium_mass} (e.g. CC 15 over 45 lines)",
+        "complex-large": "function with CC > 10 and CC x sqrt(SLOC) >= {high_mass} (e.g. CC 30 over 180 lines)",
+        "complex": "function with CC > 10 and CC x sqrt(SLOC) >= {medium_mass} (e.g. CC 15 over 100 lines)",
         "repetition": "duplicate group with lines x (copies - 1) >= {medium_dup_lines}",
         "wrapper": "trivial wrapper or shallow function",
         "complex-small": "function with CC > 10 and a smaller mass",
@@ -147,8 +148,14 @@ class ScbCheck(Step):
             sloc = fn.sloc
             d = scope.at_def_line(file, line) or Def(line, line, fn.name, line, "function")
             mass = cc * math.sqrt(sloc)
+            if mass >= self.settings["high_mass"]:
+                policy = "complex-large"
+            elif mass >= self.settings["medium_mass"]:
+                policy = "complex"
+            else:
+                policy = "complex-small"
             yield self.issue(
-                "CX", "complexity", "cc", "complex" if mass >= self.settings["medium_mass"] else "complex-small",
+                "CX", "complexity", "cc", policy,
                 f"`{d.qualname}` has cyclomatic complexity {cc} ({sloc} SLOC)",
                 file=file, symbol=d.qualname, line=d.start, end_line=d.end,
                 evidence={"cc": cc, "sloc": sloc, "mass": round(mass, 1), "weight": round(mass, 1),

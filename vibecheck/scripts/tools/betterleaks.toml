@@ -34,13 +34,14 @@ keywords = ["#sbatch", "def-", "rrg-", "ctb-", "aip-"]
 id = "internal-cluster-path"  # HPC filesystems: /scratch/<user>/..., /work1/<group>/<user>, /lustre..., /gpfs...
 regex = '''(?:^|[^\w.-])/((?:scratch|work\d*|lustre\d*|gpfs)/[\w.-]+/[\w./-]+)'''
 keywords = ["/scratch/", "/work", "/lustre", "/gpfs"]
-filter = '''matchesAny(finding["secret"], [`/(?:my|your)[-_]`, `/(?:user|username|USER)(?:/|$)`])'''
+filter = '''matchesAny(finding["secret"], [`/(?:my|your)[-_]`, `/(?:user|username|USER)(?:/|$)`, `/\.\.\.(?:/|$)`])'''  # placeholders, `/scratch/.../out`
 
 [[rules]]
 id = "internal-host-or-email"
 regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
 keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
-filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`])'''  # public documentation and websites
+# public documentation, websites and the CVMFS software stack (/cvmfs/soft.computecanada.ca/...)
+filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`, `^soft\.computecanada\.ca$`])'''
 
 [[rules.allowlists]]  # authors' and maintainers' emails in pyproject.toml are meant to be published; hosts aren't
 condition = "AND"
@@ -56,4 +57,5 @@ keywords = ["entity"]
 id = "internal-home-path"
 regex = '''/((?:home|Users)/[a-z][\w.-]{0,31}/[\w./-]+)'''
 keywords = ["/home/", "/users/"]
-filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name)/`])'''
+# placeholder users; Mila homes are internal-mila-path's
+filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name|mila)/`])'''

@@ -188,6 +188,23 @@ def offline():
     check(sorted(i["id"] for i in carried) == ["LEAK|new", "LEAK|old"],
           "a known leak keeps its ID on a full rescan, rather than a finding sharing its fingerprint taking it")
 
+    class Fn:  # what scb-check lists for a function with CC > 10
+        def __init__(self, cc, sloc):
+            self.file = "a.py"
+            self.start_line = 1
+            self.name = "f"
+            self.cyc_complexity = cc
+            self.sloc = sloc
+            self.cog_complexity = 0
+
+    class Flags:
+        class findings:
+            high_cc_functions = [Fn(11, 23), Fn(20, 78), Fn(54, 441)]
+
+    graded = created["scb-check"].complexity_issues(Path("/"), Flags, scope.Scope(Path("/"), []))
+    check([i["severity"] for i in graded] == ["low", "medium", "high"],
+          "a complex function's severity grows with its CC and length: a short helper is low, a long tangle high")
+
     def cx(symbol, policy="complex", **kw):
         return created["scb-check"].issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
                                           symbol=symbol, **kw)
@@ -363,6 +380,8 @@ def build_repo(root: Path) -> dict:
     sbatch = "#SB" + "ATCH"
     account = "rrg" + "-someprof"
     mila = "/net" + "work/scratch/s/student/data"
+    mila_home = "/home" + "/mila/s/student/data"
+    cvmfs = "/cvmfs/soft." + "computecanada" + ".ca/gentoo/2023/x86-64-v3/usr/lib64/libcpupower.so"
     cluster = "/wo" + "rk1/somelab/student/data"
     drac = "def" + "-someprof"
     email = "selftest@" + "mila" + ".quebec"
@@ -454,7 +473,8 @@ def normalize_b(rows):
     write("pkg/tests/helpers.py", "def fixture_rows():\n" + "    rows = []\n" * 6 + "    return rows\n")
     write("pkg/launch.py", f'import argparse\n\nparser = argparse.ArgumentParser()\n'
           f'parser.add_argument("--account", default="{drac}")\n')
-    write("scripts/sync.sh", f"#!/bin/bash\n{sbatch} --account={{account}}\nrsync -a {cluster} .\n")
+    write("scripts/sync.sh", f"#!/bin/bash\n{sbatch} --account={{account}}\nexport LD_PRELOAD={cvmfs}\n"
+          f"rsync -a {cluster} .  # or /scratch/.../data\n")
     write("PLAN.md", "# plan\n")
     write("Untitled.ipynb", "{}\n")
     (repo / "loss_curve.png").write_bytes(b"\x89PNG")
@@ -473,6 +493,7 @@ def normalize_b(rows):
     write("config.py", f'GITHUB_TOKEN = "{secrets["github"]}"\n')
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account={account}\npython -m pkg.main --data {mila}\n")
+    write("scripts/cache.sh", f"#!/bin/bash\nexport CACHE={mila_home}\n")
     (repo / "data").mkdir()
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
@@ -541,7 +562,12 @@ def end_to_end():
         check(one("internal-ref", "internal-cluster-path", file="scripts/sync.sh", severity="high"),
               "a /work1/<lab>/<user> path -> high")
         check(len(by.get(("internal-ref", "internal-cluster-path"), [])) == 1,
-              "a Mila /network/scratch path is not also a cluster path")
+              "a Mila /network/scratch path, and a /scratch/.../ placeholder, are not cluster paths")
+        check(one("internal-ref", "internal-mila-path", preview="home" + "/mila/s/student/data")
+              and not by.get(("internal-ref", "internal-home-path")),
+              "a Mila /home/mila path is a Mila path, not also a home path")
+        check(not one("internal-ref", "internal-host-or-email", file="scripts/sync.sh"),
+              "the public CVMFS stack /cvmfs/soft.computecanada.ca is not an internal host")
         check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
               "6 MB file at HEAD -> high, at its path there")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
@@ -673,7 +699,7 @@ def end_to_end():
         token = next(i for i in rescanned.values() if i["rule"] == "huggingface-access-token")
         check(token["status"] == "open" and token["severity"] == "critical" and not token["evidence"]["at_head"],
               "a secret only in the commits read before stays open and critical")
-        mila = next(i for i in rescanned.values() if i["rule"] == "internal-mila-path")
+        mila = next(i for i in rescanned.values() if i["rule"] == "internal-mila-path" and i["file"] == "scripts/train.sh")
         slurm = next(i for i in rescanned.values() if i["rule"] == "internal-slurm-account")
         check(mila["status"] == "open" and mila["severity"] == "low" and slurm["severity"] == "high",
               "an internal path taken out of HEAD drops to history-only (low), not fixed; one still there stays high")
@@ -682,6 +708,8 @@ def end_to_end():
         p = cli("report", r)
         report = (repo / ".vibecheck/report.md").read_text()
         check(p.returncode == 0 and "**BLOCKED**" in report, "report renders and says BLOCKED")
+        check(re.search(r"\[`scripts/train\.sh:(\d+)`\]\(\.\./scripts/train\.sh#L\1\)", report) is not None,
+              "report links each issue's file:line to the code")
         check("## Severity rules" in report and "- **critical:** credential" in report,
               "report ends with the severity rules")
         p = subprocess.run([sys.executable, str(repo / ".vibecheck/scripts/vibecheck.py"), "compare", r, "baseline"],
