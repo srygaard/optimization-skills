@@ -97,10 +97,10 @@ $S/vibecheck.py compare <repo> && $S/vibecheck.py report <repo>  #    the baseli
 
 | severity | meaning | for example | phase |
 |---|---|---|---|
-| **critical** | can't be undone once published | credentials anywhere in history | High, first |
-| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; fixable vulnerabilities; no pyproject.toml dependencies or requirements.txt at the root; no README | High |
-| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, functions comparing against many unnamed numbers, working notes at the root, red flags you add | Medium |
-| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, functions with fewer magic comparisons, string paths, other history-only findings, unused deps, no lockfile | Low |
+| **critical** | can't be undone once published, or exposes everyone who installs it | credentials anywhere in history; dependency vulnerabilities rated critical (CVSS 9.0+); a dependency whose advisory reports malicious code | High, first |
+| **high** | fix before publishing | possible secrets; internal paths and big files at HEAD; large dead code and unimported modules; generated outputs and scratch copies; no LICENSE; dependency vulnerabilities rated high, and unrated ones; no pyproject.toml dependencies or requirements.txt at the root; no README | High |
+| **medium** | the biggest quality wins | complex functions, duplicate groups, trivial wrappers, source files over 1000 code lines, functions comparing against many unnamed numbers, working notes at the root, dependency vulnerabilities rated medium, red flags you add | Medium |
+| **low** | optional | smaller complexity and duplication, small dead code, module-level globals, functions with fewer magic comparisons, string paths, other history-only findings, dependency vulnerabilities rated low or without a fix, unused deps, no lockfile | Low |
 
 The exact rules are set in one place, `scripts/tools/__init__.py`, which creates each tool with the
 severity of every kind of finding it reports and the thresholds they use; the tool's class says what each
@@ -110,7 +110,7 @@ kind covers. Every report.md ends with them, so an agent working from the report
 older than HEAD.
 
 **Critical and High phase checklist:** the user rotates leaked keys, then remove them from HEAD and decide on history
-(a fresh, squashed history is recommended: [leaks.md](references/leaks.md)) · delete what shouldn't ship
+(a fresh, squashed history is recommended: [leaks.md](references/leaks.md)) · drop any dependency whose advisory reports malicious code, and rotate what its build could reach · delete what shouldn't ship
 · add the safety net · add a LICENSE if missing (the user picks it) · bump vulnerable pins · check the
 README quickstart works from a fresh checkout.
 
@@ -198,7 +198,10 @@ severities that don't match its policy. `tools/base.py` defines `Tool`, which bu
 scan, has `scan` instead.
 
 scb-check, vulture and pip-audit run in process (pip-audit through its private API, so check
-`tools/pip_audit.py` when bumping it); ruff runs as `python -m ruff`, and deptry as `python -m deptry`, since
+`tools/pip_audit.py` when bumping it). pip-audit reports no severity, so the rating that sets a vulnerable
+dependency's issue severity comes from one OSV query per vulnerable dependency: the worst CVSS v3 base score
+of its advisories, or the severity word their database records where the vector is CVSS v2 or v4. An advisory
+nothing rates, and an unreachable OSV, leave the dependency high. ruff runs as `python -m ruff`, and deptry as `python -m deptry`, since
 deptry's API exits the process. Betterleaks 1.9.0 is not on PyPI: the script downloads its release binary once, refuses it
 unless the SHA-256 matches the pinned value, and caches it in `~/.cache/vibecheck/`. Set
 `BETTERLEAKS=/path/to/betterleaks` to use your own copy (offline machines).

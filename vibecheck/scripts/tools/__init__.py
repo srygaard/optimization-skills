@@ -21,8 +21,13 @@ from tools.vulture import Vulture
 
 MEASURE: tuple[Step, ...] = (
     ScbCheck(
-        severity={"complex": "medium", "repetition": "medium", "wrapper": "medium", "complex-small": "low",
-                  "repetition-small": "low"},
+        severity={
+            "complex": "medium",
+            "repetition": "medium",
+            "wrapper": "medium",
+            "complex-small": "low",
+            "repetition-small": "low"
+        },
         settings={
             "medium_mass": 100,  # complexity mass CC x sqrt(SLOC) from which a function is medium
             "medium_dup_lines": 20,  # duplicate-group weight lines x (copies - 1) from which it is medium
@@ -30,15 +35,34 @@ MEASURE: tuple[Step, ...] = (
         },
     ),
     Vulture(
-        severity={"dead-large": "high", "dead-small": "low", "inside-dead-code": "low"},
+        severity={
+            "dead-large": "high",
+            "dead-small": "low",
+            "inside-dead-code": "low"
+        },
         settings={
             "min_confidence": 60,  # vulture's confidence below which a candidate isn't reported
             "min_dead_lines": 5,  # smaller unused symbols still count in dead-code LOC but get no issue
             "dead_high_lines": 20,  # unused symbols at least this long are high: remove them before release
         },
     ),
-    Deptry(severity={"deps-none": "high", "deps-undeclared": "high", "deps-unused": "low"}),
-    PipAudit(severity={"vuln-fixable": "high", "vuln-unfixed": "low", "pins-none": "low"}),
+    Deptry(severity={
+        "deps-none": "high",
+        "deps-undeclared": "high",
+        "deps-unused": "low"}
+    ),
+    PipAudit(  # its band floors come from the specification's scale in pip_audit.py, not from here
+        severity={
+            "vuln-malware": "critical",
+            "vuln-critical": "critical",
+            "vuln-high": "high",
+            "vuln-unrated": "high",
+            "vuln-medium": "medium",
+            "vuln-low": "low",
+            "vuln-unfixed": "low",
+            "pins-none": "low"
+        },
+    ),
     License(severity={"license-missing": "high", "readme-missing": "high"}),
     LargeFiles(severity={"large-file": "high"}, settings={"large_file_mb": 5}),
     Clutter(severity={"clutter-output": "high", "clutter-scratch": "high", "clutter-notes": "medium"}),
@@ -56,8 +80,12 @@ MEASURE: tuple[Step, ...] = (
     ),
     Suppressions(),
 )
-LEAK_SCAN = Betterleaks(severity={"credential": "critical", "possible-credential": "high", "internal-head": "high",
-                                  "internal-history": "low"})
+LEAK_SCAN = Betterleaks(severity={
+    "credential": "critical",
+    "possible-credential": "high",
+    "internal-head": "high",
+    "internal-history": "low"
+})
 ANALYZERS = tuple(t for t in MEASURE if t.package)  # the tools vibecheck.py's script header pins
 ALL = (LEAK_SCAN, *MEASURE)
 

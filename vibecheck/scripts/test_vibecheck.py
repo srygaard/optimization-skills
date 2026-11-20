@@ -29,7 +29,7 @@ import measure
 import scope
 import state
 import tools
-from tools import deptry, vulture
+from tools import deptry, pip_audit, vulture
 from tools.base import Result, Step
 
 VIBECHECK = Path(__file__).resolve().parent / "vibecheck.py"
@@ -67,6 +67,106 @@ def offline():
     except ValueError:
         refused = True
     check(refused, "a tool created with severities that don't match its policy is refused")
+
+    audit = created["pip-audit"]
+    scores = {  # vectors from published advisories, against the base scores their databases record
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H": 9.8,
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N": 7.5,
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N": 6.1,
+        "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N": 5.5,
+        "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N": 5.3,
+    }
+    check(all(pip_audit.Cvss3(vector).score == score for vector, score in scores.items()),
+          "a CVSS v3 vector scores what its advisory records")
+    check(pip_audit.Cvss3.band_floor("MODERATE") == 4.0 and pip_audit.Cvss3.band_floor("critical") == 9.0
+          and pip_audit.Cvss3.band_floor("urgent") is None,
+          "a qualitative severity word places a score at the floor of its band in the specification's scale")
+    check(pip_audit.Cvss3.score_of("AV:L/AC:M/Au:N/C:N/I:P/A:C") is None
+          and pip_audit.Cvss3.score_of("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H") is None
+          and pip_audit.Cvss3.score_of("CVSS:3.1/AV:N/AC:L/PR:N") is None,
+          "a CVSS v2 or v4 vector, or one missing a base metric, is left unscored for the database's own word")
+    check([audit.rating(s) for s in (9.8, 7.5, 5.3, 2.0, None)]
+          == ["critical", "high", "medium", "low", "unrated"],
+          "a base score is rated by its band, and no score at all is unrated")
+    check([audit.severity[f"vuln-{band}"] for band in ("critical", "high", "medium", "low", "unrated")]
+          == ["critical", "high", "medium", "low", "high"],
+          "a fixable vulnerability takes the severity of its rating, and an unrated one stays high")
+    check(audit.settings["critical_cvss"] == pip_audit.Cvss3.SCALE["CRITICAL"]
+          and audit.severity_rules()["vuln-high"][1].endswith("(CVSS 7.0+)"),
+          "the band floors the policy states are the specification's scale, not numbers typed out again")
+
+    REFUSED = "http://127.0.0.1:1/"  # refused at once, so nothing here needs the network
+
+    class StubOsv(pip_audit.Osv):
+        """What OSV answers for one package version, without the network: only the query is replaced, so the
+        records are read by the real `Advisory.of`."""
+
+        def __init__(self, answer):
+            super().__init__(endpoint=REFUSED)  # never queried, and harmless if it ever were
+            self.answer = answer
+
+        def records(self, name, version):
+            return self.answer
+
+    class FakeVuln:  # what pip-audit hands the step: an ID, the IDs it is an alias of, and its fixed releases
+        def __init__(self, ident, aliases=(), fix_versions=()):
+            self.id = ident
+            self.aliases = set(aliases)
+            self.fix_versions = list(fix_versions)
+
+    v4_only = StubOsv([{
+        "id": "GHSA-stub", "aliases": ["PYSEC-stub", "CVE-stub"],
+        "severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H"}],
+        "database_specific": {"severity": "MODERATE", "cwe_ids": ["CWE-400"]},
+    }])
+    rated = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-stub", ["CVE-stub"], ["2.0"])], "requirements.txt", v4_only)
+    check(rated["severity"] == "medium" and rated["evidence"]["cvss"] == {"PYSEC-stub": 4.0}
+          and rated["evidence"]["cwe"] == ["CWE-400"],
+          "an advisory whose only vector is v4 is rated by its database's word, found through the alias pip-audit names")
+    unrated = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-none", (), ["2.0"])], "requirements.txt", StubOsv([]))
+    check(unrated["severity"] == "high" and unrated["evidence"]["rating"] == "unrated"
+          and "PYSEC-none" in unrated["summary"],
+          "a vulnerability nothing rates, or that OSV couldn't be reached for, stays high")
+    unfixed = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-stub")], "requirements.txt", v4_only)
+    check(unfixed["severity"] == "low" and unfixed["summary"].endswith("no fix yet"),
+          "a vulnerability without a fixed release is low whatever it is rated")
+    dead = pip_audit.Osv(endpoint=REFUSED)
+    check(dead.by_id("pkg", "1.0") == {} and not dead.answered and len(dead.unreachable) == 1
+          and dead.unreachable[0].startswith("pkg 1.0: ") and "refused" in dead.unreachable[0].lower(),
+          "an unreachable OSV rates nothing and is recorded with its reason, instead of raising out of the audit")
+    for _ in range(pip_audit.Osv.GIVE_UP):
+        dead.records("pkg", "1.0")
+    check(dead.unreachable[-1].endswith("OSV has not answered"),
+          "a feed that has answered nothing is given up on, instead of timing out once per dependency")
+    check(pip_audit.Advisory.of({}) == pip_audit.Advisory(ids=frozenset({""}), score=None, cwes=frozenset())
+          and pip_audit.Advisory.of({"id": "X", "severity": None, "database_specific": None}).score is None,
+          "an OSV record missing the fields this reads is unrated, not an error")
+    malware = StubOsv([{
+        "id": "GHSA-mal", "aliases": ["PYSEC-mal"], "summary": "Malware in pkg",
+        "database_specific": {"severity": "CRITICAL", "cwe_ids": ["CWE-912"]},
+    }])
+    hostile = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-mal")], "requirements.txt", malware)
+    check(hostile["severity"] == "critical" and hostile["evidence"]["malware"] == ["CWE-912"]
+          and "malicious code" in hostile["summary"] and "rotate" in hostile["fix"],
+          "an advisory reporting malicious code is critical and says to rotate, although no release fixes it")
+
+    word_only = StubOsv([{
+        "id": "GHSA-w", "aliases": ["PYSEC-w"],
+        "severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"}],
+        "database_specific": {"severity": "CRITICAL"},
+    }])
+    vectored = StubOsv([{
+        "id": "GHSA-v", "aliases": ["PYSEC-v"],
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+        "database_specific": {"severity": "CRITICAL"},
+    }])
+    floored = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-w", fix_versions=["2.0"])], "requirements.txt", word_only)
+    scored = audit.vuln_issue("pkg", "1.0", [FakeVuln("PYSEC-v", fix_versions=["2.0"])], "requirements.txt", vectored)
+    check("CVSS >= 9.0" in floored["summary"] and floored["evidence"]["cvss_is_floor"] == ["PYSEC-w"],
+          "a score that is only a band's floor, from a severity word, is labelled as one")
+    check(">=" not in scored["summary"] and "CVSS 9.8" in scored["summary"]
+          and scored["evidence"]["cvss_is_floor"] == [],
+          "a score computed from a CVSS v3 vector is shown as is, even when a severity word agrees")
 
     def cx(symbol, policy="complex", **kw):
         return created["scb-check"].issue("CX", "complexity", "cc", policy, f"`{symbol}` is complex", file="a.py",
@@ -468,8 +568,13 @@ def end_to_end():
         if "pip-audit" in at_head()["not_measured"]:
             print("  skip pip-audit check (offline?)")
         else:
-            check(one("vulnerable-dependency", "pip-audit", symbol="requests", severity="high"),
-                  "vulnerable pin -> high")
+            vuln = next((i for i in data["issues"] if i["symbol"] == "requests"), None)
+            rating = vuln["evidence"]["rating"] if vuln else ""
+            check(vuln is not None and rating in ("critical", "high")
+                  and vuln["severity"] == tools.policies()[f"vuln-{rating}"][0],
+                  "a pin with a serious vulnerability -> an issue at the severity that rating is set to")
+            check(vuln is not None and max(vuln["evidence"]["cvss"].values(), default=0) >= 7.0,
+                  "the advisories' CVSS scores reach the issue (OSV rates what pip-audit leaves out)")
 
         route = next(i for i in data["issues"] if i["symbol"] == "route")
         route.update(status="dismissed", note="test edit")
