@@ -79,8 +79,10 @@ torch._dynamo.mark_dynamic, .maybe_mark_dynamic, .mark_static
 torch.cond                                 # last resort for GB-3
 module.compile(...)                        # IN PLACE                -> CT-5
 
-# caching
-torch.compiler.save_cache_artifacts(), .load_cache_artifacts(blob)
+# caching                                   -> compile-time.md §7
+torch.compiler.save_cache_artifacts()      # AFTER compiling AND executing
+torch.compiler.load_cache_artifacts(blob)  # BEFORE the first compiled call
+# scripts/megacache.py                      # drop-in, multi-rank, shared-FS
 ```
 
 Names move between PyTorch versions — `cache_size_limit` became `recompile_limit`,

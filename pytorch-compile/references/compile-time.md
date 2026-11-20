@@ -169,36 +169,61 @@ a block-size change altered your results, look elsewhere.
 
 ---
 
-## 7. Caching
+## 7. Reusing compiles across runs
+
+The local Inductor/FX caches are **node-local**, so every job on a new node
+starts cold. Mega-Cache packs them into one portable blob: PGO, AOTAutograd,
+Inductor, Triton and autotuning, valid only for the same PyTorch and Triton
+version and, on CUDA, the same GPU. Beta since 2.7.
+
+```bash
+TORCHINDUCTOR_FX_GRAPH_CACHE=1
+TORCHINDUCTOR_CACHE_DIR=/scoped/path       # scope it per run -> tooling.md §1
+TORCHINDUCTOR_FORCE_DISABLE_CACHES=1       # force a cold compile; never delete a good blob
+```
 
 ```python
-torch.compiler.save_cache_artifacts()      # portable bundle ("megacache")
-torch.compiler.load_cache_artifacts(blob)
-```
-```bash
-TORCHINDUCTOR_CACHE_DIR=/scoped/path       # default is keyed only by username
-TORCHINDUCTOR_FX_GRAPH_CACHE=1
-TORCHINDUCTOR_FORCE_DISABLE_CACHES=1       # to force a cold compile
+artifacts = torch.compiler.save_cache_artifacts()   # AFTER compiling and EXECUTING
+assert artifacts is not None                        # None means nothing compiled
+artifact_bytes, cache_info = artifacts
+
+torch.compiler.load_cache_artifacts(artifact_bytes) # BEFORE the first compiled call
 ```
 
-- **Measured cold → warm:** 16–18× on a pathological compile, dropping to **4.5×**
-  once the real fix landed. *The better your compile gets, the less caching
-  matters.* Caching is not a substitute for §5.
-- **Steady-state throughput is unchanged cold vs warm.** Warmth buys compile time
-  only. If a "warm" run is faster in steady state, something else changed.
+Save after the model has *run* — `torch.compile()` returning compiles nothing.
+Load under DDP only once the process group is up and each rank has set its device.
+
+**Keying, which matters at any scale.** Name the blob by a hash over the
+**resolved** knob manifest + the **full** torch version (build suffix included) +
+the GPU name. Adding, removing or *renaming* a knob invalidates every existing
+blob and silently forces a cold run — it orphaned a 421 MB blob once. Budget for
+it, or migrate the file deliberately.
+
+**Multi-rank, shared filesystem:** `scripts/megacache.py` is a drop-in. Three
+things in it are not obvious — save from **global rank 0 only**; **stage the blob
+to node-local scratch once per node**, so N ranks do not each pull 400 MB off the
+shared filesystem; **write atomically**, so a concurrent job cannot read a torn
+blob.
+
+**A confirmed cache hit is not a speedup.** Measure the cold/warm pair. Steady
+state is unchanged either way — warmth buys compile time only.
+
+### Traps
+
 - **Autotune search is largely not cached.** A warm run still paid 191.4 s of
   coordinate-descent tuning (58% of a warm step 1) while `inductor_compile`
   collapsed to 24.9 s. That makes [CT-4](fix-patterns.md#ct-4--coordinate_descent_tuning--false-via-the-mode-preset)
   a saving on *every* run, not just cold ones.
-- **Writing back the same byte count you read** is confirmation that nothing new
-  compiled. A larger write means a shape or guard changed.
-- **Cache-key hygiene.** Key artifacts on the resolved knob manifest — and know
-  that adding, removing, or *renaming* a knob invalidates every existing artifact
-  and silently forces a cold run. Budget for it or migrate the file deliberately.
-- **Scope the Inductor cache directory per run.** The default is keyed only by OS
-  username, so every concurrent job on the machine shares it.
+- **Writing back the same byte count you read** confirms nothing new compiled; a
+  larger write means a shape or guard changed. Loaded artifacts are carried into
+  the save, so a run touching only some shapes cannot strand the others' entries.
+- **Recompiles poison the blob.** Artifacts keyed on a graph that guards a lazily
+  grown buffer ([RC-3](fix-patterns.md#rc-3--pre-warm-lazily-grown-internal-buffers))
+  can never be reused. Fix recompiles before investing in a cross-job cache.
 - **Warm step 1 is no longer mostly compile.** Once compile time falls, input
   pipeline startup can be 17% of it. Subtract that before comparing.
+- **Budget for size.** Blobs ran 97 MB – 708 MB: shared-FS quota, and a load cost
+  on every rank.
 
 ---
 
