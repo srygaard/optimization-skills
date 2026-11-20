@@ -18,7 +18,11 @@ metadata:
 
 # Vibecheck a repo before open-sourcing
 
-A router. One script measures, tracks and reports; depth lives in `references/`.
+Vibecheck steers where to spend cleanup time. Its scores, metrics and rankings point at code worth a
+look; they are not targets. A change is worth making when it makes the code easier to understand, use
+or change, whether or not a number moves.
+
+One script measures, tracks and reports; depth lives in `references/`.
 
 **Outputs**, all in `<repo>/.vibecheck/` (it ignores itself in git, so nothing there is published):
 - `report.md`: a self-contained work plan another agent can execute without this skill.
@@ -147,16 +151,15 @@ a yes/no decision with a reason, never a 1–10 score: dismiss with `"status": "
   version of the paper that reports each. Verbosity and Erosion (arXiv 2603.24755v2, Table 2: 473
   maintained human Python repos): human code averages 0.19 and 0.34, agent-written code 0.44 and 0.68.
   Violation % and Clone Ratio (v1, Table 2; v2 dropped them): human 0.11 and 0.06, agent 0.32 and 0.08.
-  They are for orientation, not targets. `scb-check` 0.2.0 measures Violation % and Clone Ratio with its own
+  `scb-check` 0.2.0 measures Violation % and Clone Ratio with its own
   rules and clone detection, so compare their changes, not their levels. The paper has no reference for
   Cognitive erosion.
 - **Ratios can rise when you delete clean code.** `compare` warns on absolute amounts instead: verbosity-
   flagged LOC, mass in high-CC functions, suppressions, files over 1000 code lines, module-level globals.
-  A warning after a refactor means it added slop.
+  A warning after a refactor says where to look at what it added.
 - **Erosion predicts maintenance cost, not failures** (paper v2, Appendix B.3): it correlates with the
   cost of the next change, not with whether that change passes its tests, and plain size (LOC) predicts
-  cost better still. Net LOC is the simplest honest signal: most cleanup commits should delete more than
-  they add.
+  cost better still. Net LOC is the simplest signal: most cleanup commits delete more than they add.
 - **"not measured" is not zero,** and a tool that measured nothing never closes its earlier issues.
   `deptry` needs `pyproject.toml` dependencies or a `requirements.txt`; `pip-audit` needs a pinned source
   (`uv.lock`, `pylock.toml`, pinned requirements, `.venv`). It never resolves unpinned requirements,
