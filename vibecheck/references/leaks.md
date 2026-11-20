@@ -38,7 +38,9 @@ service-account JSON), GitHub, Slack, private keys, JWTs and URLs with embedded 
   `{account}`, and DRAC allocation names such as `def-<prof>` anywhere), HPC filesystem paths (`/scratch/<user>/…`,
   `/work1/<group>/<user>`, `/lustre…`, `/gpfs…`), lab hostnames and emails (not public `docs.`/`www.`
   sites, nor emails in `pyproject.toml`, where authors list them to publish them), wandb entities, and
-  absolute home paths.
+  absolute home paths. Placeholders used in docs and examples are not reported: `someprof`, `somelab`,
+  `student`, `prof`, `user`, `example`, any word ending in `name` (`your_name`, `username`, `lab-name`), and
+  a `...` path segment.
 
 Add repo-specific patterns with `--internal REGEX` (Go RE2 syntax, no lookarounds); they are remembered.
 To change the file itself:
@@ -47,7 +49,9 @@ To change the file itself:
 - **Capture paths without their leading `/`.** The built-in global filter drops matches that are whole
   `/home/...` or `/Users/...` paths.
 - **Use a `filter` expression** (true means drop the finding). Betterleaks 1.9 doesn't apply
-  `[[rules.allowlists]]`.
+  `[[rules.allowlists]]`. A top-level `filter` would replace the built-in global one, so every internal
+  rule repeats the same placeholder pattern first in its filter: give a new internal rule a copy, and keep the
+  copies identical.
 - **Check it:** `betterleaks config check --config betterleaks.toml`.
 
 ## Severity

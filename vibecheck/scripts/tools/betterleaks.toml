@@ -1,6 +1,10 @@
 # Rules added to Betterleaks' built-ins for ML research repos. An id starting with "internal-" marks an
 # internal reference, and a low-confidence rule a possible credential. Keywords (lowercase) only make the
 # scan faster. Before editing, read references/leaks.md.
+#
+# Every internal rule's filter starts with the same placeholder pattern, so examples in docs and test fixtures
+# (`def-someprof`, `/scratch/s/student/`, `/home/your_name/`: any word ending in "name") are not reported. A top-level `filter` would replace
+# Betterleaks' built-in global filter, so the pattern is repeated on each rule; keep the copies identical.
 
 [extend]
 useDefault = true
@@ -19,29 +23,32 @@ confidence = "low"
 id = "internal-mila-path"
 regex = '''/((?:network/(?:scratch|projects|datasets|weights|archive)|home/mila)/[\w./-]+)'''
 keywords = ["/network/", "/home/mila/"]
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`])'''
 
 [[rules]]
 id = "internal-drac-path"
 regex = '''/((?:project|projects|scratch|nearline)/(?:def|rrg|ctb)-[\w./-]+)'''
 keywords = ["def-", "rrg-", "ctb-"]
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`])'''
 
 [[rules]]
 id = "internal-slurm-account"  # an #SBATCH account (not a template like {account} or $ACCT), or a DRAC allocation name
-regex = '''#SBATCH\s+(?:-A|--account)[=\s]+([^\s{$<]\S*)|(?:^|[^\w/.-])((?:def|rrg|ctb|aip)-[a-z][\w-]*)'''
+regex = '''#SBATCH\s+(?:-A|--account)[=\s]+([^\s{$<\\][^\s\\]*)|(?:^|[^\w/.-])((?:def|rrg|ctb|aip)-[a-z][\w-]*)'''
 keywords = ["#sbatch", "def-", "rrg-", "ctb-", "aip-"]
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`])'''
 
 [[rules]]
 id = "internal-cluster-path"  # HPC filesystems: /scratch/<user>/..., /work1/<group>/<user>, /lustre..., /gpfs...
 regex = '''(?:^|[^\w.-])/((?:scratch|work\d*|lustre\d*|gpfs)/[\w.-]+/[\w./-]+)'''
 keywords = ["/scratch/", "/work", "/lustre", "/gpfs"]
-filter = '''matchesAny(finding["secret"], [`/(?:my|your)[-_]`, `/(?:user|username|USER)(?:/|$)`, `/\.\.\.(?:/|$)`])'''  # placeholders, `/scratch/.../out`
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`, `/(?:my|your)[-_]`, `/\.\.\.(?:/|$)`])'''  # and `/scratch/my-data`, `/scratch/.../out`
 
 [[rules]]
 id = "internal-host-or-email"
 regex = '''\b([\w.+-]+@(?:mila\.quebec|umontreal\.ca)|[\w-]+(?:\.[\w-]+)*\.(?:mila\.quebec|alliancecan\.ca|computecanada\.ca))\b'''
 keywords = ["mila.quebec", "umontreal.ca", "alliancecan.ca", "computecanada.ca"]
 # public documentation, websites and the CVMFS software stack (/cvmfs/soft.computecanada.ca/...)
-filter = '''matchesAny(finding["secret"], [`^(?:docs|www)\.`, `^soft\.computecanada\.ca$`])'''
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`, `^(?:docs|www)\.`, `^soft\.computecanada\.ca$`])'''
 
 [[rules.allowlists]]  # authors' and maintainers' emails in pyproject.toml are meant to be published; hosts aren't
 condition = "AND"
@@ -52,10 +59,11 @@ regexes = ['''@''']
 id = "internal-wandb-entity"
 regex = '''(?i)(?:wandb_entity["'\s]*[:=]\s*["']?|entity\s*=\s*["'])([\w-]{2,})'''
 keywords = ["entity"]
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`])'''
 
 [[rules]]
 id = "internal-home-path"
 regex = '''/((?:home|Users)/[a-z][\w.-]{0,31}/[\w./-]+)'''
 keywords = ["/home/", "/users/"]
-# placeholder users; Mila homes are internal-mila-path's
-filter = '''matchesAny(finding["secret"], [`^(?:home|Users)/(?:user|username|me|ubuntu|runner|name|yourname|your_name|mila)/`])'''
+# and generic or CI users; Mila homes are internal-mila-path's
+filter = '''matchesAny(finding["secret"], [`(?i)(?:^|[^\w])(?:some(?:prof|lab|user|one|group)|students?|prof|professor|\w*name|user|example)(?:$|[^\w])`, `^(?:home|Users)/(?:me|ubuntu|runner|mila)/`])'''

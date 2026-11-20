@@ -260,64 +260,29 @@ class PipAudit(Step):
 
     def vuln_issue(self, name: str, version: str, vulns: list, label: str, feed: Osv) -> Issue:
         """A vulnerable dependency: the worst advisory rating sets the severity, and the target is the lowest
-        release that fixes all of its fixable vulnerabilities."""
+        release that fixes all of its fixable vulnerabilities. Malicious code outranks every rating."""
         by_id = {v.id: v for v in vulns}
-        installed = Version(version)
-        # an advisory lists a fix per release line: only one above the installed release fixes it
-        fixes = {
-            ident: min((f for f in v.fix_versions if f > installed), default=None)
-            for ident, v
-            in by_id.items()
-        }
-        unfixed = sorted(ident for ident, f in fixes.items() if f is None)
-        fixed = [f for f in fixes.values() if f is not None]
-        target = str(max(fixed)) if fixed else None
         ids = sorted(by_id)
-        held = feed.by_id(name, version)
-        matched = {
-            ident: Advisory.merge([held[alias] for alias in {ident, *vuln.aliases} & held.keys()])
-            for ident, vuln
-            in by_id.items()
-            if {ident, *vuln.aliases} & held.keys()
-        }
+        target, unfixed = fix_target(by_id, Version(version))
+        matched = matched_advisories(by_id, feed.by_id(name, version))
         rated = {ident: a.score for ident, a in matched.items() if a.score is not None}
         cwes = sorted({cwe for a in matched.values() for cwe in a.cwes})
         malware = sorted(self.MALWARE.intersection(cwes))
-        worst = max(rated.values(), default=None)
-        worst_id = max(rated, key=rated.get, default=None)
         floors = sorted(ident for ident in rated if matched[ident].floor)
-        band = self.rating(worst)
-        plural = "y" if len(ids) == 1 else "ies"
+        band = self.rating(max(rated.values(), default=None))
         if malware:
             policy = "vuln-malware"
-            summary = (f"{name} {version}: an advisory reports malicious code in this release "
-                       f"({', '.join(malware)}; {', '.join(ids[:3])}{', ...' if len(ids) > 3 else ''})")
-            start = f"Bump {name} to >= {target}" if target else f"Remove {name}: no release is named clean"
-            fix = (f"{start}. A malicious release is not closed by a version bump alone: rotate every credential "
-                   "the build or runtime could reach, and check whether it was ever installed.")
-            done_when = (f"{name} no longer resolves to an affected release, and the credentials it could reach "
-                         "are rotated.")
+            text = malware_text(name, version, ids, malware, target)
         else:
             policy = f"vuln-{band}" if target else "vuln-unfixed"
-            summary = f"{name} {version}: {len(ids)} known vulnerabilit{plural}"
-            if worst is None:
-                summary += f" of unrated severity ({', '.join(ids[:3])}{', ...' if len(ids) > 3 else ''})"
-            else:
-                basis = f"CVSS >= {worst}" if worst_id in floors else f"CVSS {worst}"
-                summary += f", worst rated {band} ({basis}, {worst_id})"
-            summary += f"; fixed in {target}" if target else "; no fix yet"
-            rest = f" other than {', '.join(unfixed)}, which no release fixes yet" if target and unfixed else ""
-            summary += rest
-            fix = (f"Bump {name} to >= {target} in the dependency spec, then run the safety net."
-                   if target else "No fixed release yet: note it, or drop the dependency if it is easy.")
-            done_when = f"pip-audit reports no vulnerabilities for {name}{rest}."
+            text = vulnerability_text(name, version, ids, rated, floors, band, target, unfixed)
         return self.issue(
-            "VULN", "vulnerable-dependency", "pip-audit", policy, summary,
+            "VULN", "vulnerable-dependency", "pip-audit", policy, text.summary,
             key=f"VULN|{name.lower()}", file=label, symbol=name,
             evidence={"version": version, "vulns": ids, "fix_to": target, "rating": band, "cvss": rated,
                       "cvss_is_floor": floors, "cwe": cwes, "malware": malware,
                       "aliases": sorted({a for v in by_id.values() for a in v.aliases})[:10]},
-            fix=fix, done_when=done_when)
+            fix=text.fix, done_when=text.done_when)
 
     def measure(self, scope) -> Result:
         from pip_audit._audit import Auditor
@@ -391,3 +356,76 @@ def audit_source(repo: Path, tmp: Path) -> PinnedSource:
     if sites := sorted(repo.glob(".venv/lib/python*/site-packages")):
         return PinnedSource(PipSource(paths=[sites[-1]]), ".venv")
     return PinnedSource(None, "")
+
+
+class Wording(NamedTuple):
+    """What a vulnerable-dependency issue says."""
+    summary: str
+    fix: str
+    done_when: str
+
+
+SHOWN_IDS = 3  # advisory IDs a summary lists before "..."
+
+
+def some_ids(ids: list) -> str:
+    """The first few advisory IDs, comma-separated, with "..." when there are more."""
+    return ", ".join(ids[:SHOWN_IDS]) + (", ..." if len(ids) > SHOWN_IDS else "")
+
+
+def fix_target(by_id: dict, installed: Version) -> tuple:
+    """(the lowest release that fixes every fixable vulnerability or None, the IDs no release fixes). An advisory
+    lists a fix per release line: only one above the installed release fixes it."""
+    fixes = {
+        ident: min((f for f in v.fix_versions if f > installed), default=None)
+        for ident, v
+        in by_id.items()
+    }
+    unfixed = sorted(ident for ident, f in fixes.items() if f is None)
+    fixed = [f for f in fixes.values() if f is not None]
+    return (str(max(fixed)) if fixed else None), unfixed
+
+
+def matched_advisories(by_id: dict, held: dict) -> dict:
+    """{vulnerability ID: Advisory} for the vulnerabilities OSV holds a record of, under their ID or an alias."""
+    matched = {}
+    for ident, vuln in by_id.items():
+        known = {ident, *vuln.aliases} & held.keys()
+        if known:
+            matched[ident] = Advisory.merge([held[alias] for alias in known])
+    return matched
+
+
+def malware_text(name: str, version: str, ids: list, malware: list, target: str | None) -> Wording:
+    """The wording for a release an advisory reports as malicious: bumping it is not enough."""
+    start = f"Bump {name} to >= {target}" if target else f"Remove {name}: no release is named clean"
+    return Wording(
+        summary=(f"{name} {version}: an advisory reports malicious code in this release "
+                 f"({', '.join(malware)}; {some_ids(ids)})"),
+        fix=(f"{start}. A malicious release is not closed by a version bump alone: rotate every credential "
+             "the build or runtime could reach, and check whether it was ever installed."),
+        done_when=(f"{name} no longer resolves to an affected release, and the credentials it could reach "
+                   "are rotated."),
+    )
+
+
+def vulnerability_text(name: str, version: str, ids: list, rated: dict, floors: list, band: str,
+                       target: str | None, unfixed: list) -> Wording:
+    """The wording for a flawed release: how many vulnerabilities, the worst rating and where it comes from,
+    and the release that fixes them."""
+    plural = "y" if len(ids) == 1 else "ies"
+    summary = f"{name} {version}: {len(ids)} known vulnerabilit{plural}"
+    if rated:
+        worst_id = max(rated, key=rated.get)
+        worst = rated[worst_id]
+        basis = f"CVSS >= {worst}" if worst_id in floors else f"CVSS {worst}"
+        summary += f", worst rated {band} ({basis}, {worst_id})"
+    else:
+        summary += f" of unrated severity ({some_ids(ids)})"
+    summary += f"; fixed in {target}" if target else "; no fix yet"
+    rest = f" other than {', '.join(unfixed)}, which no release fixes yet" if target and unfixed else ""
+    if target:
+        fix = f"Bump {name} to >= {target} in the dependency spec, then run the safety net."
+    else:
+        fix = "No fixed release yet: note it, or drop the dependency if it is easy."
+    return Wording(summary=summary + rest, fix=fix, done_when=f"pip-audit reports no vulnerabilities for {name}{rest}.")

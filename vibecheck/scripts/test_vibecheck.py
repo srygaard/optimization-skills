@@ -378,12 +378,12 @@ def build_repo(root: Path) -> dict:
                "between": "ghp" + "_" + "".join(rnd.choice(alnum) for _ in range(36))}  # committed after a scan
     # split so this file scans clean
     sbatch = "#SB" + "ATCH"
-    account = "rrg" + "-someprof"
-    mila = "/net" + "work/scratch/s/student/data"
-    mila_home = "/home" + "/mila/s/student/data"
+    account = "rrg" + "-qvtest"
+    mila = "/net" + "work/scratch/q/qvtest/data"
+    mila_home = "/home" + "/mila/q/qvtest/data"
     cvmfs = "/cvmfs/soft." + "computecanada" + ".ca/gentoo/2023/x86-64-v3/usr/lib64/libcpupower.so"
-    cluster = "/wo" + "rk1/somelab/student/data"
-    drac = "def" + "-someprof"
+    cluster = "/wo" + "rk1/fixturelab/qvtest/data"
+    drac = "def" + "-qvtest"
     email = "selftest@" + "mila" + ".quebec"
 
     repo = root / "repo"
@@ -494,6 +494,9 @@ def normalize_b(rows):
     write("settings.py", f'TOKEN = "{secrets["allowed"]}"  # gitleaks' + ':allow\n')
     write("train.sh", f"#!/bin/bash\n{sbatch} --account={account}\npython -m pkg.main --data {mila}\n")
     write("scripts/cache.sh", f"#!/bin/bash\nexport CACHE={mila_home}\n")
+    write("scripts/example.sh", f"#!/bin/bash\n{sbatch} --account=def" + "-someprof\n"  # placeholders, as in docs
+          "rsync -a /scr" + "atch/s/student/data /home" + "/your_name/data /scr" + "atch/u/your_username/data\n")
+    write("pkg/submit.py", f'SCRIPT = "{sbatch} --account={account}\\npython train.py"\n')  # a \n escape, not a newline
     (repo / "data").mkdir()
     (repo / "data/blob.bin").write_bytes(rnd.randbytes(6_000_000))
     sh("add", "-A")
@@ -563,11 +566,15 @@ def end_to_end():
               "a /work1/<lab>/<user> path -> high")
         check(len(by.get(("internal-ref", "internal-cluster-path"), [])) == 1,
               "a Mila /network/scratch path, and a /scratch/.../ placeholder, are not cluster paths")
-        check(one("internal-ref", "internal-mila-path", preview="home" + "/mila/s/student/data")
+        check(one("internal-ref", "internal-mila-path", preview="home" + "/mila/q/qvtest/data")
               and not by.get(("internal-ref", "internal-home-path")),
               "a Mila /home/mila path is a Mila path, not also a home path")
         check(not one("internal-ref", "internal-host-or-email", file="scripts/sync.sh"),
               "the public CVMFS stack /cvmfs/soft.computecanada.ca is not an internal host")
+        check(not any(i["file"] == "scripts/example.sh" for i in data["issues"]),
+              "placeholders (def-someprof, /scratch/s/student, /home/your_name) are not internal references")
+        check(one("internal-ref", "internal-slurm-account", file="pkg/submit.py", preview="rrg" + "-qvtest"),
+              "an #SBATCH account in a Python string ends before a \\n escape")
         check(one("large-file", "large-file", severity="high", file="data/weights.bin"),
               "6 MB file at HEAD -> high, at its path there")
         check(one("license", "missing-license", severity="high"), "missing LICENSE -> high")
@@ -662,7 +669,7 @@ def end_to_end():
         (repo / ".betterleaksignore").write_text("\n".join(leak["evidence"]["fingerprints"]) + "\n")
         subprocess.run(["git", "-C", r, "add", ".betterleaksignore"], check=True)
         train = repo / "scripts/train.sh"
-        train.write_text(train.read_text().replace("/net" + "work/scratch/s/student/data", "data/"))
+        train.write_text(train.read_text().replace("/net" + "work/scratch/q/qvtest/data", "data/"))
         (repo / "pkg/config.py").write_text('"""Config."""\n\n' + (repo / "config.py").read_text())
         subprocess.run(["git", "-C", r, "rm", "-q", "config.py"], check=True)
         subprocess.run(["git", "-C", r, "add", "pkg/config.py"], check=True)
