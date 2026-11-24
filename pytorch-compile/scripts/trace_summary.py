@@ -18,6 +18,7 @@ import gzip
 import io
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -72,37 +73,41 @@ def read_lines(path):
     return [ln.rstrip("\n") for ln in stream]
 
 
+# torch >= 2.14 prefixes each metadata line with a glog header:
+# `V1124 14:11:14.095000 3815663 torch/_dynamo/utils.py:2363] {...}`
+GLOG_PREFIX = re.compile(r"^[VIWEC]\d{4} [\d:.]+ +\d+ \S+\] ")
+
+
+def parse_meta(line):
+    """The JSON object on a metadata line (glog prefix optional), else None."""
+    text = GLOG_PREFIX.sub("", line, count=1).lstrip()
+    if not text.startswith("{"):
+        return None
+    try:
+        meta = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(meta, dict):
+        return None
+    return meta
+
+
 def parse_records(lines):
     """Yield (meta, payload_text). A metadata line is a line parsing as a JSON
     object; if it has has_payload, the payload is the indented run that follows."""
     i, n = 0, len(lines)
     while i < n:
-        line = lines[i]
-        stripped = line.lstrip()
-        if not stripped.startswith("{"):
-            i += 1
-            continue
-        try:
-            meta = json.loads(stripped)
-        except Exception:
-            i += 1
-            continue
-        if not isinstance(meta, dict):
-            i += 1
-            continue
+        meta = parse_meta(lines[i])
         i += 1
+        if meta is None:
+            continue
         payload = None
         if meta.get("has_payload"):
             buf = []
             while i < n:
                 nxt = lines[i]
-                if nxt.lstrip().startswith("{"):
-                    try:
-                        cand = json.loads(nxt.lstrip())
-                        if isinstance(cand, dict):
-                            break
-                    except Exception:
-                        pass
+                if parse_meta(nxt) is not None:
+                    break
                 if nxt and not (nxt.startswith("\t") or nxt.startswith("    ")):
                     break
                 buf.append(nxt[1:] if nxt.startswith("\t") else nxt[4:])
