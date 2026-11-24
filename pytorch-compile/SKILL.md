@@ -16,7 +16,7 @@ description: >-
   invisible to module hooks), and for measurement hygiene when benchmarking
   compiled vs eager.
 metadata:
-  version: 1.1.0
+  version: 1.1.1
 ---
 
 # torch.compile diagnostics
