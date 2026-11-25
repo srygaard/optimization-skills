@@ -12,7 +12,7 @@ description: >-
   chunk shuffling or shuffle buffers; when scaling to more nodes or faster
   GPUs; or when one DDP rank waits on another's late batch.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # PyTorch DataLoader: stop starving the GPU
@@ -208,9 +208,14 @@ array into every worker. Store the path and open the memmap in the worker.
 ## 5. Staging and read order
 
 **Stage once per node.**
-- **Price it:** bytes ÷ the node's sequential rate, paid by every job while the
-  GPUs idle. At modest read rates a deeper prefetch queue may hide the network
-  reads without staging: try it first.
+- **Small datasets: stage by default.** If the copy finishes during job startup
+  (imports, model build, compile), it costs little, and over a long run it is a
+  small share of wall time. Every read after it is local. Prefer this to tuning
+  around network reads.
+- **Large datasets: price it first.** Bytes ÷ the node's sequential rate, paid
+  by every job while the GPUs idle, and it must fit local disk. If that's too
+  long, a deeper prefetch queue may hide the network reads at modest read
+  rates; otherwise partition or stream (below).
 - `srun --ntasks-per-node=1 --ntasks=$SLURM_NNODES <copy>` before launch, or
   local rank 0 copies behind a barrier. Never once per rank.
 - Copy a few large files with a few streams; extract locally. Stage only the
