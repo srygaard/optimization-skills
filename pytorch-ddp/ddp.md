@@ -31,25 +31,39 @@ that steps the optimizer, and **zero** times on the others. Check it in the
 trace (`ddp_trace.py` prints the count per micro-batch), not in the code,
 which looks right when it is broken.
 
-The common trap is with `torch.compile(DDP(model))`. Wrappers such as
+The common trap is with `torch.compile(DDP(model))`, which returns an
+`OptimizedModule` holding the DDP object in `_orig_mod`. Wrappers such as
 Accelerate resolve `getattr(model, "no_sync", nullcontext)`. Anything that
-writes the bare model into the compiled wrapper's `_orig_mod` makes
-`no_sync` resolve to `nullcontext`. Numerics stay correct, nothing warns,
-and every micro-batch all-reduces. Writers seen in practice:
+writes the bare model into `_orig_mod` makes `no_sync` resolve to
+`nullcontext`. Numerics stay correct, nothing warns, and every micro-batch
+all-reduces. Writers seen in practice:
 
 * `accelerator.unwrap_model(model)`, whose default is
   `keep_torch_compile=True`;
 * `accelerator.get_state_dict(model)`, whose default is `unwrap=True`. It
   fires at the first checkpoint save, so short benchmarks never see it.
-  Pass `unwrap=False` and strip the `_orig_mod.` / `module.` prefixes.
 
-Guard it in code: at train start and after every checkpoint save, assert
-that `no_sync` still resolves to `DistributedDataParallel.no_sync`.
+**Default: compile in place** (checked on torch 2.15 and Accelerate 1.16,
+2026-11). `Module.compile()` compiles `__call__` without wrapping, so the
+object stays a `DistributedDataParallel` with no `_orig_mod` to
+overwrite. Keep the PyTorch DDP notes' order: wrap first, so DDPOptimizer
+sees the buckets.
 
-The trap exists only in this wrap order. Reversing it
-(`DDP(torch.compile(model))`) avoids the trap but loses all overlap,
-because the compiled backward emits every gradient at the end of one
-graph. Keep `torch.compile(DDP(model))` and fix the writers.
+```python
+ddp_model = DDP(model, device_ids=[rank])
+ddp_model.compile()
+```
+
+Both forms compile to the same graphs, but after a default
+`get_state_dict` only the wrapper form all-reduced on every micro-batch.
+Under Accelerate, compile the model `prepare()` returns and leave its
+`dynamo_backend` off, since that compiles with the wrapper.
+
+If the wrapper stays: call `get_state_dict(model, unwrap=False)` and strip
+the `_orig_mod.` / `module.` prefixes, call `unwrap_model(model,
+keep_torch_compile=False)`, and assert at train start and after every
+checkpoint save that `no_sync` still resolves to
+`DistributedDataParallel.no_sync`.
 
 Other rules:
 

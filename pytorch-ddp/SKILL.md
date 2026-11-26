@@ -16,7 +16,7 @@ description: >-
   GPUDirect RDMA is suspect, when one slow rank stalls the job, or when
   deciding if a model has outgrown DDP (FSDP/HSDP/ZeRO).
 metadata:
-  version: 3.2.0
+  version: 3.3.0
 ---
 
 # Tuning data-parallel training (DDP, FSDP, HSDP)
@@ -92,10 +92,12 @@ Files:
 1. **Strategy** by memory (F12; `fsdp.md`, "Choosing the strategy"): DDP
    whenever it fits, since it communicates least and leaves the compute
    alone; else HSDP, else FSDP.
-2. **Correctness guard in code**, from the strategy file: for
-   `torch.compile(DDP(model))`, assert at train start and after every
-   checkpoint save that `no_sync` still resolves to
-   `DistributedDataParallel.no_sync` (`ddp.md`). For FSDP, build the
+2. **Correctness guard in code**, from the strategy file: for DDP,
+   compile in place on the DDP object (`ddp_model.compile()`, not
+   `torch.compile(ddp_model)`), so no helper can strip DDP off and break
+   `no_sync` (`ddp.md`). If the code keeps `torch.compile(DDP(model))`,
+   assert at train start and after every checkpoint save that `no_sync`
+   still resolves to `DistributedDataParallel.no_sync`. For FSDP, build the
    optimizer after sharding and clip with the sharded API (`fsdp.md`).
    With process groups beyond the world one (HSDP, tensor parallel),
    create their communicators at startup, before any in-process NVML
