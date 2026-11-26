@@ -12,7 +12,7 @@ instead.
     cache = MegaCache(Path(os.environ["SCRATCH"]) / "torch_cache", "my_model",
                       dtype="bf16", compile_mode=mode, seq_len=seq_len)
     cache.load()                  # every rank, before the first compiled forward
-    model = torch.compile(model)
+    model.compile()
     train(...)                    # compilation happens here
     cache.save()                  # in a finally block, so a crash still saves
 

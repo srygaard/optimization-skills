@@ -32,7 +32,7 @@ time**:
 
 ```python
 torch._inductor.config.coordinate_descent_tuning = False   # DOES NOTHING
-model = torch.compile(model, mode="max-autotune")          # preset wins
+model.compile(mode="max-autotune")                         # preset wins
 ```
 
 Expand the preset and pass it explicitly:
@@ -40,7 +40,7 @@ Expand the preset and pass it explicitly:
 ```python
 opts = torch._inductor.list_mode_options(mode)   # dict for the preset
 opts["coordinate_descent_tuning"] = False
-model = torch.compile(model, options=opts)       # options=, NOT mode=
+model.compile(options=opts)                      # options=, NOT mode=
 ```
 
 `mode=` and `options=` are mutually exclusive. This is why "I disabled it and

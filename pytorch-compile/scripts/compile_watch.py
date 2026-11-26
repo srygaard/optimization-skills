@@ -200,12 +200,12 @@ def selftest():
             return self.b(h) + self.cache[:n].unsqueeze(0)
 
     model = Toy()
-    compiled = torch.compile(model)
+    model.compile()
     watch = CompileWatch()
 
     shapes = [(2, 8, 64), (2, 8, 64), (2, 12, 64), (2, 12, 64), (2, 20, 64), (2, 20, 64)]
     for i, shape in enumerate(shapes):
-        out = compiled(torch.randn(*shape))
+        out = model(torch.randn(*shape))
         out.sum().backward()
         watch.step(i, shape=shape)
 

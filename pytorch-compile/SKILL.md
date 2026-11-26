@@ -16,7 +16,7 @@ description: >-
   invisible to module hooks), and for measurement hygiene when benchmarking
   compiled vs eager.
 metadata:
-  version: 1.1.1
+  version: 1.2.0
 ---
 
 # torch.compile diagnostics
@@ -189,6 +189,11 @@ with no code change at all. [mode-selection.md](references/mode-selection.md).
    — a performance cliff, not a crash.
 10. An experiment whose active path has no positive confirmation in the log can
     silently run the baseline and be mistaken for a refutation.
+11. Prefer `model.compile(...)` (in place) over `model = torch.compile(model)`
+    to avoid `_orig_mod`: prefixed `state_dict` keys, and unwrap helpers that
+    rewrite it on the live model (under DDP, silently disabling `no_sync`). Under
+    DDP, call it on the DDP object. It returns `None`; `model.forward(x)` and
+    `deepcopy`/pickled copies run eager.
 
 ---
 

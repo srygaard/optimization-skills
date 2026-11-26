@@ -77,7 +77,7 @@ torch.compiler.cudagraph_mark_step_begin   #                         -> RC-6
 torch.compiler.set_stance, .is_compiling
 torch._dynamo.mark_dynamic, .maybe_mark_dynamic, .mark_static
 torch.cond                                 # last resort for GB-3
-module.compile(...)                        # IN PLACE                -> CT-5
+module.compile(...)                        # in place, the default   -> SKILL.md §6, CT-5
 
 # caching                                   -> compile-time.md §7
 torch.compiler.save_cache_artifacts()      # AFTER compiling AND executing

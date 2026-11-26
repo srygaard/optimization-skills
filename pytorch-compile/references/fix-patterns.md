@@ -278,7 +278,7 @@ failure if the attribute name changes.
 
 ```python
 prewarm_positional_cache(model, max_len=max(all_shape_plans))
-model = torch.compile(model, ...)
+model.compile(...)
 ```
 
 **Two properties make this worse than one wasted recompile**, and are why it is
@@ -422,7 +422,7 @@ and pass it explicitly:
 ```python
 opts = torch._inductor.list_mode_options(mode)   # dict for "max-autotune" etc.
 opts["coordinate_descent_tuning"] = False
-model = torch.compile(model, options=opts)       # options=, NOT mode=
+model.compile(options=opts)                      # options=, NOT mode=
 ```
 
 **Measured on one workload:** −43% and −54% cold compile at a short shape, −24% at
